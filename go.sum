@@ -1,3 +1,5 @@
+github.com/avfs/avfs v0.23.0 h1:a80QYYOno3zX/VBwtAfcVMz0xWfayAk6CfITFBWGuak=
+github.com/avfs/avfs v0.23.0/go.mod h1:kry+Z5N1rEt7lNfv8xVUazaCDpL9wK7Tvy+DChOEJXI=
 github.com/davecgh/go-spew v1.1.0 h1:ZDRjVQ15GmhC3fiQ8ni8+OwkZQO4DARzQgrnXU1Liz8=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/kr/fs v0.1.0 h1:Jskdu9ieNAYnjxsi0LbQp1ulIKZV1LAFgK1tWhpZgl8=

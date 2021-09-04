@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -21,6 +22,99 @@ const (
 	SftpServerWorkerCount = 8
 )
 
+type FileApi interface {
+	Chdir() error
+	Chmod(mode fs.FileMode) error
+	Chown(uid, gid int) error
+	Close() error
+	Fd() uintptr
+	Name() string
+	Read(b []byte) (n int, err error)
+	ReadAt(b []byte, off int64) (n int, err error)
+	Seek(offset int64, whence int) (ret int64, err error)
+	Stat() (fs.FileInfo, error)
+	Sync() error
+	Truncate(size int64) error
+	Write(b []byte) (n int, err error)
+	WriteAt(b []byte, off int64) (n int, err error)
+	WriteString(s string) (n int, err error)
+}
+
+type FsApi interface {
+	Chtimes(name string, atime, mtime time.Time) error
+	Chmod(name string, mode os.FileMode) error
+	Chown(name string, uid, gid int) error
+	Mkdir(name string, perm os.FileMode) error
+	Lstat(name string) (os.FileInfo, error)
+	OpenFile(name string, flag int, perm os.FileMode) (FileApi, error)
+	ReadDir(path string) ([]os.DirEntry, error)
+	Readlink(name string) (string, error)
+	Remove(name string) error
+	Rename(oldpath, newpath string) error
+	Stat(name string) (os.FileInfo, error)
+	Symlink(oldname, newname string) error
+	Truncate(name string, size int64) error
+}
+
+type osApi struct {
+}
+
+func (osApi) Chtimes(name string, atime, mtime time.Time) error {
+	return os.Chtimes(name, atime, mtime)
+}
+
+func (osApi) Chmod(name string, mode os.FileMode) error {
+	return os.Chmod(name, mode)
+}
+
+func (osApi) Chown(name string, uid, gid int) error {
+	return os.Chown(name, uid, gid)
+}
+
+func (osApi) Mkdir(name string, perm os.FileMode) error {
+	return os.Mkdir(name, perm)
+}
+
+func (osApi) Lstat(name string) (os.FileInfo, error) {
+	return os.Lstat(name)
+}
+
+type osApiFileHelper struct {
+	os.File
+}
+
+func (osApi) OpenFile(name string, flag int, perm os.FileMode) (FileApi, error) {
+	return os.OpenFile(name, flag, perm)
+}
+
+func (osApi) ReadDir(name string) ([]os.DirEntry, error) {
+	return os.ReadDir(name)
+}
+
+func (osApi) Readlink(name string) (string, error) {
+	return os.Readlink(name)
+}
+
+func (osApi) Remove(name string) error {
+	return os.Remove(name)
+}
+
+func (osApi) Rename(oldpath, newpath string) error {
+	return os.Rename(oldpath, newpath)
+}
+
+func (osApi) Stat(name string) (os.FileInfo, error) {
+	return os.Stat(name)
+}
+
+func (osApi) Symlink(oldname, newname string) error {
+	return os.Symlink(oldname, newname)
+}
+
+func (osApi) Truncate(name string, size int64) error {
+	return os.Truncate(name, size)
+}
+
 // Server is an SSH File Transfer Protocol (sftp) server.
 // This is intended to provide the sftp subsystem to an ssh server daemon.
 // This implementation currently supports most of sftp server protocol version 3,
@@ -30,12 +124,13 @@ type Server struct {
 	debugStream   io.Writer
 	readOnly      bool
 	pktMgr        *packetManager
-	openFiles     map[string]*os.File
+	openFiles     map[string]FileApi
 	openFilesLock sync.RWMutex
 	handleCount   int
+	fsApi         FsApi
 }
 
-func (svr *Server) nextHandle(f *os.File) string {
+func (svr *Server) nextHandle(f FileApi) string {
 	svr.openFilesLock.Lock()
 	defer svr.openFilesLock.Unlock()
 	svr.handleCount++
@@ -55,7 +150,7 @@ func (svr *Server) closeHandle(handle string) error {
 	return EBADF
 }
 
-func (svr *Server) getHandle(handle string) (*os.File, bool) {
+func (svr *Server) getHandle(handle string) (FileApi, bool) {
 	svr.openFilesLock.RLock()
 	defer svr.openFilesLock.RUnlock()
 	f, ok := svr.openFiles[handle]
@@ -84,7 +179,8 @@ func NewServer(rwc io.ReadWriteCloser, options ...ServerOption) (*Server, error)
 		serverConn:  svrConn,
 		debugStream: ioutil.Discard,
 		pktMgr:      newPktMgr(svrConn),
-		openFiles:   make(map[string]*os.File),
+		openFiles:   make(map[string]FileApi),
+		fsApi:       osApi{},
 	}
 
 	for _, o := range options {
@@ -111,6 +207,14 @@ func WithDebug(w io.Writer) ServerOption {
 func ReadOnly() ServerOption {
 	return func(s *Server) error {
 		s.readOnly = true
+		return nil
+	}
+}
+
+// SetFsApi replaces the default os api for file system access.
+func SetFsApi(api FsApi) ServerOption {
+	return func(s *Server) error {
+		s.fsApi = api
 		return nil
 	}
 }
@@ -174,7 +278,7 @@ func handlePacket(s *Server, p orderedRequest) error {
 		}
 	case *sshFxpStatPacket:
 		// stat the requested file
-		info, err := os.Stat(toLocalPath(p.Path))
+		info, err := s.fsApi.Stat(toLocalPath(p.Path))
 		rpkt = &sshFxpStatResponse{
 			ID:   p.ID,
 			info: info,
@@ -184,7 +288,7 @@ func handlePacket(s *Server, p orderedRequest) error {
 		}
 	case *sshFxpLstatPacket:
 		// stat the requested file
-		info, err := os.Lstat(toLocalPath(p.Path))
+		info, err := s.fsApi.Lstat(toLocalPath(p.Path))
 		rpkt = &sshFxpStatResponse{
 			ID:   p.ID,
 			info: info,
@@ -208,24 +312,24 @@ func handlePacket(s *Server, p orderedRequest) error {
 		}
 	case *sshFxpMkdirPacket:
 		// TODO FIXME: ignore flags field
-		err := os.Mkdir(toLocalPath(p.Path), 0755)
+		err := s.fsApi.Mkdir(toLocalPath(p.Path), 0755)
 		rpkt = statusFromError(p.ID, err)
 	case *sshFxpRmdirPacket:
-		err := os.Remove(toLocalPath(p.Path))
+		err := s.fsApi.Remove(toLocalPath(p.Path))
 		rpkt = statusFromError(p.ID, err)
 	case *sshFxpRemovePacket:
-		err := os.Remove(toLocalPath(p.Filename))
+		err := s.fsApi.Remove(toLocalPath(p.Filename))
 		rpkt = statusFromError(p.ID, err)
 	case *sshFxpRenamePacket:
-		err := os.Rename(toLocalPath(p.Oldpath), toLocalPath(p.Newpath))
+		err := s.fsApi.Rename(toLocalPath(p.Oldpath), toLocalPath(p.Newpath))
 		rpkt = statusFromError(p.ID, err)
 	case *sshFxpSymlinkPacket:
-		err := os.Symlink(toLocalPath(p.Targetpath), toLocalPath(p.Linkpath))
+		err := s.fsApi.Symlink(toLocalPath(p.Targetpath), toLocalPath(p.Linkpath))
 		rpkt = statusFromError(p.ID, err)
 	case *sshFxpClosePacket:
 		rpkt = statusFromError(p.ID, s.closeHandle(p.Handle))
 	case *sshFxpReadlinkPacket:
-		f, err := os.Readlink(toLocalPath(p.Path))
+		f, err := s.fsApi.Readlink(toLocalPath(p.Path))
 		rpkt = &sshFxpNamePacket{
 			ID: p.ID,
 			NameAttrs: []*sshFxpNameAttr{
@@ -258,7 +362,7 @@ func handlePacket(s *Server, p orderedRequest) error {
 	case *sshFxpOpendirPacket:
 		p.Path = toLocalPath(p.Path)
 
-		if stat, err := os.Stat(p.Path); err != nil {
+		if stat, err := s.fsApi.Stat(p.Path); err != nil {
 			rpkt = statusFromError(p.ID, err)
 		} else if !stat.IsDir() {
 			rpkt = statusFromError(p.ID, &os.PathError{
@@ -446,7 +550,7 @@ func (p *sshFxpOpenPacket) respond(svr *Server) responsePacket {
 		osFlags |= os.O_EXCL
 	}
 
-	f, err := os.OpenFile(toLocalPath(p.Path), osFlags, 0644)
+	f, err := svr.fsApi.OpenFile(toLocalPath(p.Path), osFlags, 0644)
 	if err != nil {
 		return statusFromError(p.ID, err)
 	}
@@ -461,7 +565,7 @@ func (p *sshFxpReaddirPacket) respond(svr *Server) responsePacket {
 		return statusFromError(p.ID, EBADF)
 	}
 
-	dirents, err := f.Readdir(128)
+	dirents, err := svr.fsApi.ReadDir(f.Name())
 	if err != nil {
 		return statusFromError(p.ID, err)
 	}
@@ -470,9 +574,14 @@ func (p *sshFxpReaddirPacket) respond(svr *Server) responsePacket {
 
 	ret := &sshFxpNamePacket{ID: p.ID}
 	for _, dirent := range dirents {
+		dirinfo, err := svr.fsApi.Stat(dirent.Name())
+		if err != nil {
+			return statusFromError(p.ID, err)
+		}
+
 		ret.NameAttrs = append(ret.NameAttrs, &sshFxpNameAttr{
 			Name:     dirent.Name(),
-			LongName: runLs(idLookup, dirent),
+			LongName: runLs(idLookup, dirinfo),
 			Attrs:    []interface{}{dirent},
 		})
 	}
@@ -490,13 +599,13 @@ func (p *sshFxpSetstatPacket) respond(svr *Server) responsePacket {
 	if (p.Flags & sshFileXferAttrSize) != 0 {
 		var size uint64
 		if size, b, err = unmarshalUint64Safe(b); err == nil {
-			err = os.Truncate(p.Path, int64(size))
+			err = svr.fsApi.Truncate(p.Path, int64(size))
 		}
 	}
 	if (p.Flags & sshFileXferAttrPermissions) != 0 {
 		var mode uint32
 		if mode, b, err = unmarshalUint32Safe(b); err == nil {
-			err = os.Chmod(p.Path, os.FileMode(mode))
+			err = svr.fsApi.Chmod(p.Path, os.FileMode(mode))
 		}
 	}
 	if (p.Flags & sshFileXferAttrACmodTime) != 0 {
@@ -507,7 +616,7 @@ func (p *sshFxpSetstatPacket) respond(svr *Server) responsePacket {
 		} else {
 			atimeT := time.Unix(int64(atime), 0)
 			mtimeT := time.Unix(int64(mtime), 0)
-			err = os.Chtimes(p.Path, atimeT, mtimeT)
+			err = svr.fsApi.Chtimes(p.Path, atimeT, mtimeT)
 		}
 	}
 	if (p.Flags & sshFileXferAttrUIDGID) != 0 {
@@ -516,7 +625,7 @@ func (p *sshFxpSetstatPacket) respond(svr *Server) responsePacket {
 		if uid, b, err = unmarshalUint32Safe(b); err != nil {
 		} else if gid, _, err = unmarshalUint32Safe(b); err != nil {
 		} else {
-			err = os.Chown(p.Path, int(uid), int(gid))
+			err = svr.fsApi.Chown(p.Path, int(uid), int(gid))
 		}
 	}
 
@@ -554,7 +663,7 @@ func (p *sshFxpFsetstatPacket) respond(svr *Server) responsePacket {
 		} else {
 			atimeT := time.Unix(int64(atime), 0)
 			mtimeT := time.Unix(int64(mtime), 0)
-			err = os.Chtimes(f.Name(), atimeT, mtimeT)
+			err = svr.fsApi.Chtimes(f.Name(), atimeT, mtimeT)
 		}
 	}
 	if (p.Flags & sshFileXferAttrUIDGID) != 0 {
