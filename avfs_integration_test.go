@@ -7,6 +7,8 @@ import (
 	"bytes"
 	"crypto/sha1"
 	"errors"
+	"fmt"
+	"github.com/avfs/avfs/vfs/memfs"
 	"io"
 	"io/ioutil"
 	"math/rand"
@@ -30,20 +32,27 @@ import (
 )
 
 type adoptedVfs struct {
-	avfs.DummyFS
+	avfs.VFS
 }
 
-func (p *adoptedVfs) OpenFile(name string, flag int, perm os.FileMode) (FileApi, error) {
-	return p.OpenFile(name, flag, perm)
+func (p adoptedVfs) OpenFile(name string, flag int, perm os.FileMode) (FileApi, error) {
+	var tmp avfs.VFS = p.VFS
+	return tmp.OpenFile(name, flag, perm)
 }
 
-func testAvfsClientGoSvr(t testing.TB, readonly bool, delay time.Duration, dummyFs *avfs.DummyFS) (*Client, *exec.Cmd, *avfs.DummyFS) {
+func (p adoptedVfs) ReadDir(name string) ([]os.DirEntry, error) {
+	var tmp avfs.VFS = p.VFS
+	res, err := tmp.ReadDir(name)
+	return res, err
+}
+
+func testAvfsClientGoSvr(t testing.TB, readonly bool, delay time.Duration, dummyFs avfs.VFS) (*Client, *exec.Cmd, avfs.VFS) {
 	c1, c2 := netPipe(t)
 
-	options := []ServerOption{WithDebug(os.Stderr)}
+	options := []ServerOption{WithDebug(os.Stderr), SetFsApi(&adoptedVfs{dummyFs})}
 
 	if readonly {
-		options = append(options, ReadOnly(), SetFsApi(&adoptedVfs{*dummyFs}))
+		options = append(options, ReadOnly())
 	}
 
 	server, err := NewServer(c1, options...)
@@ -68,12 +77,12 @@ func testAvfsClientGoSvr(t testing.TB, readonly bool, delay time.Duration, dummy
 
 // testAvfsClient returns a *Client connected to a locally running sftp-server
 // the *exec.Cmd returned must be defer Wait'd.
-func testAvfsClient(t testing.TB, readonly bool, delay time.Duration) (*Client, *exec.Cmd, *avfs.DummyFS) {
+func testAvfsClient(t testing.TB, readonly bool, delay time.Duration) (*Client, *exec.Cmd, avfs.VFS) {
 	if !*testIntegration {
 		t.Skip("skipping integration test")
 	}
 
-	vs := avfs.NewDummyFS()
+	vs := memfs.New(memfs.WithMainDirs())
 
 	if *testServerImpl {
 		return testAvfsClientGoSvr(t, readonly, delay, vs)
@@ -117,7 +126,7 @@ func TestAvfsLstat(t *testing.T) {
 	defer cmd.Wait()
 	defer sftp.Close()
 
-	f, err := ioutil.TempFile("", "sftptest-lstat")
+	f, err := vfs.OpenFile(vfs.TempDir()+"/sftptest-lstat", os.O_RDWR|os.O_CREATE, 0775)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,15 +153,15 @@ func TestAvfsLstatIsNotExist(t *testing.T) {
 	defer cmd.Wait()
 	defer sftp.Close()
 
-	f, err := ioutil.TempFile("", "sftptest-lstatisnotexist")
+	f, err := vfs.OpenFile(vfs.TempDir()+"/sftptest-lstatisnotexist", os.O_RDWR|os.O_CREATE, 0775)
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.Close()
+	defer f.Close()
 	vfs.Remove(f.Name())
 
-	if _, err := sftp.Lstat(f.Name()); !vfs.IsNotExist(err) {
-		t.Errorf("vfs.IsNotExist(%v) = false, want true", err)
+	if _, err := sftp.Lstat(f.Name()); !os.IsNotExist(err) {
+		t.Errorf("os.IsNotExist(%s, %v) = false, want true", f.Name(), err)
 	}
 }
 
@@ -161,15 +170,14 @@ func TestAvfsMkdir(t *testing.T) {
 	defer cmd.Wait()
 	defer sftp.Close()
 
-	dir, err := ioutil.TempDir("", "sftptest-mkdir")
+	sub, err := vfs.MkdirTemp("", "mkdir")
+	defer require.NoError(t, vfs.RemoveAll(sub))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer vfs.RemoveAll(dir)
 
-	sub := path.Join(dir, "mkdir1")
 	if err := sftp.Mkdir(sub); err != nil {
-		t.Fatal(err)
+		t.Fatal(err, sub)
 	}
 	if _, err := vfs.Lstat(sub); err != nil {
 		t.Fatal(err)
@@ -180,17 +188,22 @@ func TestAvfsMkdirAll(t *testing.T) {
 	defer cmd.Wait()
 	defer sftp.Close()
 
-	dir, err := ioutil.TempDir("", "sftptest-mkdirall")
+	dir, err := vfs.MkdirTemp("", "mkdirall")
+	defer require.NoError(t, vfs.RemoveAll(dir))
+
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer vfs.RemoveAll(dir)
+
+	if err := sftp.Mkdir(dir); err != nil {
+		t.Fatal(err, dir)
+	}
 
 	sub := path.Join(dir, "mkdir1", "mkdir2", "mkdir3")
 	if err := sftp.MkdirAll(sub); err != nil {
 		t.Fatal(err)
 	}
-	info, err := vfs.Lstat(sub)
+	info, err := vfs.Lstat(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,11 +217,12 @@ func TestAvfsOpen(t *testing.T) {
 	defer cmd.Wait()
 	defer sftp.Close()
 
-	f, err := ioutil.TempFile("", "sftptest-open")
+	f, err := vfs.CreateTemp("", "sftptest-open")
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.Close()
+
+	defer f.Close()
 	defer vfs.Remove(f.Name())
 
 	got, err := sftp.Open(f.Name())
@@ -221,22 +235,22 @@ func TestAvfsOpen(t *testing.T) {
 }
 
 func TestAvfsOpenIsNotExist(t *testing.T) {
-	sftp, cmd, vfs := testAvfsClient(t, READONLY, NODELAY)
+	sftp, cmd, _ := testAvfsClient(t, READONLY, NODELAY)
 	defer cmd.Wait()
 	defer sftp.Close()
 
-	if _, err := sftp.Open("/doesnt/exist/"); !vfs.IsNotExist(err) {
-		t.Errorf("vfs.IsNotExist(%v) = false, want true", err)
+	if _, err := sftp.Open("/doesnt/exist/"); !os.IsNotExist(err) {
+		t.Errorf("os.IsNotExist(%v) = false, want true", err)
 	}
 }
 
 func TestAvfsStatIsNotExist(t *testing.T) {
-	sftp, cmd, vfs := testAvfsClient(t, READONLY, NODELAY)
+	sftp, cmd, _ := testAvfsClient(t, READONLY, NODELAY)
 	defer cmd.Wait()
 	defer sftp.Close()
 
-	if _, err := sftp.Stat("/doesnt/exist/"); !vfs.IsNotExist(err) {
-		t.Errorf("vfs.IsNotExist(%v) = false, want true", err)
+	if _, err := sftp.Stat("/doesnt/exist/"); !os.IsNotExist(err) {
+		t.Errorf("os.IsNotExist(%v) = false, want true", err)
 	}
 }
 
@@ -284,10 +298,11 @@ func TestAvfsSeek(t *testing.T) {
 	defer cmd.Wait()
 	defer sftp.Close()
 
-	fOS, err := ioutil.TempFile("", "sftptest-seek")
+	fOS, err := vfs.CreateTemp("", "sftptest-seek")
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	defer vfs.Remove(fOS.Name())
 	defer fOS.Close()
 
@@ -329,10 +344,12 @@ func TestAvfsCreate(t *testing.T) {
 	defer cmd.Wait()
 	defer sftp.Close()
 
-	f, err := ioutil.TempFile("", "sftptest-create")
+	f, err := vfs.CreateTemp("", "sftptest-create")
+
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	defer f.Close()
 	defer vfs.Remove(f.Name())
 
@@ -348,18 +365,21 @@ func TestAvfsAppend(t *testing.T) {
 	defer cmd.Wait()
 	defer sftp.Close()
 
-	f, err := ioutil.TempFile("", "sftptest-append")
+	f, err := vfs.CreateTemp("", "sftptest-append")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
-	defer vfs.Remove(f.Name())
 
+	println(f.Name())
+	ff, err := vfs.OpenFile(f.Name(), os.O_RDWR|os.O_APPEND, 0775)
+	fmt.Printf("foobar %s %s\n", ff, err)
 	f2, err := sftp.OpenFile(f.Name(), os.O_RDWR|os.O_APPEND)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer f2.Close()
+	defer f.Close()
+	defer vfs.Remove(f.Name())
 }
 
 func TestAvfsCreateFailed(t *testing.T) {
@@ -367,9 +387,12 @@ func TestAvfsCreateFailed(t *testing.T) {
 	defer cmd.Wait()
 	defer sftp.Close()
 
-	f, err := ioutil.TempFile("", "sftptest-createfailed")
+	n, err := vfs.MkdirTemp("", "sftptest-createfailed")
 	require.NoError(t, err)
-
+	f, err := vfs.Open(n)
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer f.Close()
 	defer vfs.Remove(f.Name())
 
@@ -385,7 +408,11 @@ func TestAvfsFileName(t *testing.T) {
 	defer cmd.Wait()
 	defer sftp.Close()
 
-	f, err := ioutil.TempFile("", "sftptest-filename")
+	n, err := vfs.MkdirTemp("", "sftptest-filename")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := vfs.Open(n)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -407,7 +434,11 @@ func TestAvfsFileStat(t *testing.T) {
 	defer cmd.Wait()
 	defer sftp.Close()
 
-	f, err := ioutil.TempFile("", "sftptest-filestat")
+	n, err := vfs.MkdirTemp("", "sftptest-filestat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := vfs.Open(n)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -441,7 +472,11 @@ func TestAvfsStatLink(t *testing.T) {
 	defer cmd.Wait()
 	defer sftp.Close()
 
-	f, err := ioutil.TempFile("", "sftptest-statlink")
+	n, err := vfs.MkdirTemp("", "sftptest-statlink")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := vfs.Open(n)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -501,17 +536,17 @@ func TestAvfsRemove(t *testing.T) {
 	defer cmd.Wait()
 	defer sftp.Close()
 
-	f, err := ioutil.TempFile("", "sftptest-remove")
+	f, err := vfs.CreateTemp("", "sftptest-remove")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer vfs.Remove(f.Name())
-	f.Close()
+	defer f.Close()
 
 	if err := sftp.Remove(f.Name()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := vfs.Lstat(f.Name()); !vfs.IsNotExist(err) {
+	if _, err := vfs.Lstat(f.Name()); !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
 }
@@ -521,7 +556,7 @@ func TestAvfsRemoveDir(t *testing.T) {
 	defer cmd.Wait()
 	defer sftp.Close()
 
-	dir, err := ioutil.TempDir("", "sftptest-removedir")
+	dir, err := vfs.MkdirTemp("", "sftptest-removedir")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -530,7 +565,7 @@ func TestAvfsRemoveDir(t *testing.T) {
 	if err := sftp.Remove(dir); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := vfs.Lstat(dir); !vfs.IsNotExist(err) {
+	if _, err := vfs.Lstat(dir); !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
 }
@@ -540,7 +575,11 @@ func TestAvfsRemoveFailed(t *testing.T) {
 	defer cmd.Wait()
 	defer sftp.Close()
 
-	f, err := ioutil.TempFile("", "sftptest-removefailed")
+	n, err := vfs.MkdirTemp("", "sftptest-removefailed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := vfs.Open(n)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -569,7 +608,7 @@ func TestAvfsRename(t *testing.T) {
 	if err := sftp.Rename(f.Name(), f2); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := vfs.Lstat(f.Name()); !vfs.IsNotExist(err) {
+	if _, err := vfs.Lstat(f.Name()); !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
 	if _, err := vfs.Lstat(f2); err != nil {
@@ -586,38 +625,16 @@ func TestAvfsPosixRename(t *testing.T) {
 	defer vfs.RemoveAll(dir)
 	f, err := vfs.Create(filepath.Join(dir, "old"))
 	require.NoError(t, err)
-	f.Close()
-
+	defer f.Close()
 	f2 := filepath.Join(dir, "new")
 	if err := sftp.PosixRename(f.Name(), f2); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := vfs.Lstat(f.Name()); !vfs.IsNotExist(err) {
+	if _, err := vfs.Lstat(f.Name()); !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
 	if _, err := vfs.Lstat(f2); err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestAvfsGetwd(t *testing.T) {
-	sftp, cmd, vfs := testAvfsClient(t, READONLY, NODELAY)
-	defer cmd.Wait()
-	defer sftp.Close()
-
-	lwd, err := vfs.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	rwd, err := sftp.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !filepath.IsAbs(rwd) {
-		t.Fatalf("Getwd: wanted absolute path, got %q", rwd)
-	}
-	if filepath.ToSlash(lwd) != filepath.ToSlash(rwd) {
-		t.Fatalf("Getwd: want %q, got %q", lwd, rwd)
 	}
 }
 
@@ -655,7 +672,7 @@ func TestAvfsLink(t *testing.T) {
 	require.NoError(t, err)
 	data := []byte("linktest")
 	_, err = f.Write(data)
-	f.Close()
+	defer f.Close()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -699,7 +716,11 @@ func TestAvfsChmod(t *testing.T) {
 	defer cmd.Wait()
 	defer sftp.Close()
 
-	f, err := ioutil.TempFile("", "sftptest-chmod")
+	n, err := vfs.MkdirTemp("", "sftptest-chmod")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := vfs.Open(n)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -722,7 +743,7 @@ func TestAvfsChmod(t *testing.T) {
 
 	stat, err := vfs.Stat(f.Name())
 	require.NoError(t, err)
-	require.EqualValues(t, 0500, stat.Mode())
+	require.EqualValues(t, 0500, stat.Mode()&0777)
 }
 
 func TestAvfsChmodReadonly(t *testing.T) {
@@ -731,7 +752,11 @@ func TestAvfsChmodReadonly(t *testing.T) {
 	defer cmd.Wait()
 	defer sftp.Close()
 
-	f, err := ioutil.TempFile("", "sftptest-chmodreadonly")
+	n, err := vfs.MkdirTemp("", "sftptest-chmodreadonly")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := vfs.Open(n)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -753,7 +778,11 @@ func TestAvfsSetuid(t *testing.T) {
 	defer cmd.Wait()
 	defer sftp.Close()
 
-	f, err := ioutil.TempFile("", "sftptest-setuid")
+	n, err := vfs.MkdirTemp("", "sftptest-setuid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := vfs.Open(n)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -824,7 +853,11 @@ func TestAvfsChown(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	f, err := ioutil.TempFile("", "sftptest-chown")
+	n, err := vfs.MkdirTemp("", "sftptest-chown")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := vfs.Open(n)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -885,7 +918,11 @@ func TestAvfsChownReadonly(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	f, err := ioutil.TempFile("", "sftptest-chownreadonly")
+	n, err := vfs.MkdirTemp("", "sftptest-chownreadonly")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := vfs.Open(n)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -902,7 +939,11 @@ func TestAvfsChtimes(t *testing.T) {
 	defer cmd.Wait()
 	defer sftp.Close()
 
-	f, err := ioutil.TempFile("", "sftptest-chtimes")
+	n, err := vfs.MkdirTemp("", "sftptest-chtimes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := vfs.Open(n)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -926,7 +967,11 @@ func TestAvfsChtimesReadonly(t *testing.T) {
 	defer cmd.Wait()
 	defer sftp.Close()
 
-	f, err := ioutil.TempFile("", "sftptest-chtimesreadonly")
+	n, err := vfs.MkdirTemp("", "sftptest-chtimesreadonly")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := vfs.Open(n)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -945,7 +990,7 @@ func TestAvfsTruncate(t *testing.T) {
 	defer cmd.Wait()
 	defer sftp.Close()
 
-	f, err := ioutil.TempFile("", "sftptest-truncate")
+	f, err := vfs.CreateTemp("", "sftptest-truncate")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -972,7 +1017,7 @@ func TestAvfsTruncateReadonly(t *testing.T) {
 	defer cmd.Wait()
 	defer sftp.Close()
 
-	f, err := ioutil.TempFile("", "sftptest-truncreadonly")
+	f, err := vfs.CreateTemp("", "sftptest-truncreadonly")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1006,16 +1051,7 @@ func TestAvfsReadSimple(t *testing.T) {
 	defer cmd.Wait()
 	defer sftp.Close()
 
-	d, err := ioutil.TempDir("", "sftptest-readsimple")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer vfs.RemoveAll(d)
-
-	f, err := ioutil.TempFile(d, "read-test")
-	if err != nil {
-		t.Fatal(err)
-	}
+	f, err := vfs.CreateTemp("", "sftptest-truncreadonly")
 	fname := f.Name()
 	f.Write([]byte("hello"))
 	f.Close()
@@ -1049,8 +1085,9 @@ func TestAvfsReadSequential(t *testing.T) {
 
 	defer vfs.RemoveAll(d)
 
-	f, err := ioutil.TempFile(d, "read-sequential-test")
+	f, err := vfs.CreateTemp("", "sftptest-truncreadonly")
 	require.NoError(t, err)
+
 	fname := f.Name()
 	content := []byte("hello world")
 	f.Write(content)
@@ -1108,25 +1145,20 @@ func TestAvfsReadDir(t *testing.T) {
 	defer sftp2.Close()
 
 	dir := vfs.TempDir()
-
+	print(dir)
 	d, err := vfs.Open(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer d.Close()
 	osfiles, err := vfs.ReadDir(d.Name())
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	sftp1Files, err := sftp1.ReadDir(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
+
 	sftp2Files, err := sftp2.ReadDir(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	osFilesByName := map[string]os.FileInfo{}
 	for _, f := range osfiles {
@@ -1205,7 +1237,11 @@ func TestAvfsRead(t *testing.T) {
 
 	for _, disableConcurrentReads := range []bool{true, false} {
 		for _, tt := range clientReadTests {
-			f, err := ioutil.TempFile(d, "read-test")
+			n_, err := vfs.MkdirTemp(d, "read-test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			f, err := vfs.Open(n_)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1242,7 +1278,6 @@ func writeN(t *testing.T, w io.Writer, n int64) string {
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
 
 	h := sha1.New()
-
 	mw := io.MultiWriter(w, h)
 
 	written, err := io.CopyN(mw, r, n)
@@ -1595,7 +1630,7 @@ func walkTree(n *Node, path string, f func(path string, n *Node)) {
 	}
 }
 
-func makeTree(t *testing.T, vfs *avfs.DummyFS) {
+func makeTree(t *testing.T, vfs avfs.VFS) {
 	walkTree(tree, tree.name, func(path string, n *Node) {
 		if n.entries == nil {
 			fd, err := vfs.Create(path)

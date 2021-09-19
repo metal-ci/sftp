@@ -45,6 +45,7 @@ type FsApi interface {
 	Chmod(name string, mode os.FileMode) error
 	Chown(name string, uid, gid int) error
 	Mkdir(name string, perm os.FileMode) error
+	Link(oldname, newname string) error
 	Lstat(name string) (os.FileInfo, error)
 	OpenFile(name string, flag int, perm os.FileMode) (FileApi, error)
 	ReadDir(path string) ([]os.DirEntry, error)
@@ -73,6 +74,10 @@ func (osApi) Chown(name string, uid, gid int) error {
 
 func (osApi) Mkdir(name string, perm os.FileMode) error {
 	return os.Mkdir(name, perm)
+}
+
+func (osApi) Link(oldname, newname string) error {
+	return os.Link(oldname, newname)
 }
 
 func (osApi) Lstat(name string) (os.FileInfo, error) {
@@ -312,7 +317,7 @@ func handlePacket(s *Server, p orderedRequest) error {
 		}
 	case *sshFxpMkdirPacket:
 		// TODO FIXME: ignore flags field
-		err := s.fsApi.Mkdir(toLocalPath(p.Path), 0755)
+		err := s.fsApi.Mkdir(toLocalPath(p.Path), 0766)
 		rpkt = statusFromError(p.ID, err)
 	case *sshFxpRmdirPacket:
 		err := s.fsApi.Remove(toLocalPath(p.Path))
@@ -564,8 +569,8 @@ func (p *sshFxpReaddirPacket) respond(svr *Server) responsePacket {
 	if !ok {
 		return statusFromError(p.ID, EBADF)
 	}
-
 	dirents, err := svr.fsApi.ReadDir(f.Name())
+
 	if err != nil {
 		return statusFromError(p.ID, err)
 	}
