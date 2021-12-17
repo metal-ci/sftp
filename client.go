@@ -345,6 +345,7 @@ func (c *Client) ReadDir(p string) ([]os.FileInfo, error) {
 					continue
 				}
 				attrs = append(attrs, fileInfoFromStat(attr, path.Base(filename)))
+				println(filename)
 			}
 		case sshFxpStatus:
 			// TODO(dfc) scope warning!

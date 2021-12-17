@@ -574,7 +574,9 @@ func (p *sshFxpReaddirPacket) respond(svr *Server) responsePacket {
 	if err != nil {
 		return statusFromError(p.ID, err)
 	}
-
+	if len(dirents) == 0 {
+		return statusFromError(p.ID, io.EOF)
+	}
 	idLookup := osIDLookup{}
 
 	ret := &sshFxpNamePacket{ID: p.ID}

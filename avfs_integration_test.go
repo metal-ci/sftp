@@ -18,7 +18,6 @@ import (
 	"path"
 	"path/filepath"
 	"reflect"
-	"regexp"
 	"sort"
 	"strconv"
 	"testing"
@@ -831,15 +830,6 @@ func TestAvfsChown(t *testing.T) {
 	defer cmd.Wait()
 	defer sftp.Close()
 
-	usr, err := user.Current()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if usr.Uid != "0" {
-		t.Log("must be root to run chown tests")
-		t.Skip()
-	}
-
 	chownto, err := user.Lookup("daemon") // seems common-ish...
 	if err != nil {
 		t.Fatal(err)
@@ -864,30 +854,42 @@ func TestAvfsChown(t *testing.T) {
 	defer vfs.Remove(f.Name())
 	f.Close()
 
-	before, err := exec.Command("ls", "-nl", f.Name()).Output()
+	before, err := vfs.Stat(f.Name())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := sftp.Chown(f.Name(), toUID, toGID); err != nil {
 		t.Fatal(err)
 	}
-	after, err := exec.Command("ls", "-nl", f.Name()).Output()
+	after, err := vfs.Stat(f.Name())
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	spaceRegex := regexp.MustCompile(`\s+`)
+	bf := before.Sys().(*memfs.MemInfo)
+	if before == nil {
+		t.Fatal(bf, "not memfs.MemInfo")
+	}
+	af := after.Sys().(*memfs.MemInfo)
+	if before == nil {
+		t.Fatal(af, "not memfs.MemInfo")
+	}
 
-	beforeWords := spaceRegex.Split(string(before), -1)
-	if beforeWords[2] != "0" {
-		t.Fatalf("bad previous user? should be root")
+	if bf.Uid() == af.Uid() {
+		t.Fatalf("chwon didn't change uid %d -> %d", bf.Uid(), af.Uid())
 	}
-	afterWords := spaceRegex.Split(string(after), -1)
-	if afterWords[2] != chownto.Uid || afterWords[3] != chownto.Gid {
-		t.Fatalf("bad chown: %#v", afterWords)
+
+	if bf.Gid() == af.Gid() {
+		t.Fatalf("chwon didn't change gid %d -> %d", bf.Gid(), af.Gid())
 	}
-	t.Logf("before: %v", string(before))
-	t.Logf(" after: %v", string(after))
+
+	if toUID != af.Uid() {
+		t.Fatalf("chwon didn't change uid %d -> %d", toUID, af.Uid())
+	}
+
+	if toGID != af.Gid() {
+		t.Fatalf("chwon didn't change gid %d -> %d", toGID, af.Gid())
+	}
 }
 
 func TestAvfsChownReadonly(t *testing.T) {
@@ -895,15 +897,6 @@ func TestAvfsChownReadonly(t *testing.T) {
 	sftp, cmd, vfs := testAvfsClient(t, READONLY, NODELAY)
 	defer cmd.Wait()
 	defer sftp.Close()
-
-	usr, err := user.Current()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if usr.Uid != "0" {
-		t.Log("must be root to run chown tests")
-		t.Skip()
-	}
 
 	chownto, err := user.Lookup("daemon") // seems common-ish...
 	if err != nil {
@@ -1237,14 +1230,12 @@ func TestAvfsRead(t *testing.T) {
 
 	for _, disableConcurrentReads := range []bool{true, false} {
 		for _, tt := range clientReadTests {
-			n_, err := vfs.MkdirTemp(d, "read-test")
+			f, err := vfs.CreateTemp(d, "read-test")
+
 			if err != nil {
 				t.Fatal(err)
 			}
-			f, err := vfs.Open(n_)
-			if err != nil {
-				t.Fatal(err)
-			}
+
 			defer f.Close()
 			hash := writeN(t, f, tt.n)
 			sftp.disableConcurrentReads = disableConcurrentReads
