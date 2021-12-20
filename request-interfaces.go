@@ -2,7 +2,7 @@ package sftp
 
 import (
 	"io"
-	"os"
+	"io/fs"
 )
 
 // WriterAtReaderAt defines the interface to return when a file is to
@@ -110,7 +110,7 @@ type NameLookupFileLister interface {
 // The copy() builtin is best for the copying.
 // Note in cases of an error, the error text will be sent to the client.
 type ListerAt interface {
-	ListAt([]os.FileInfo, int64) (int, error)
+	ListAt([]fs.FileInfo, int64) (int, error)
 }
 
 // TransferError is an optional interface that readerAt and writerAt

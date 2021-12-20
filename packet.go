@@ -6,8 +6,9 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/avfs/avfs"
 	"io"
-	"os"
+	"io/fs"
 	"reflect"
 )
 
@@ -37,7 +38,7 @@ func marshalString(b []byte, v string) []byte {
 	return append(marshalUint32(b, uint32(len(v))), v...)
 }
 
-func marshalFileInfo(b []byte, fi os.FileInfo) []byte {
+func marshalFileInfo(b []byte, fi fs.FileInfo) []byte {
 	// attributes variable struct, and also variable per protocol version
 	// spec version 3 attributes:
 	// uint32   flags
@@ -94,7 +95,7 @@ func marshal(b []byte, v interface{}) []byte {
 		return marshalUint64(b, v)
 	case string:
 		return marshalString(b, v)
-	case os.FileInfo:
+	case fs.FileInfo:
 		return marshalFileInfo(b, v)
 	default:
 		switch d := reflect.ValueOf(v); d.Kind() {
@@ -1242,7 +1243,8 @@ func (p *sshFxpExtendedPacketPosixRename) UnmarshalBinary(b []byte) error {
 }
 
 func (p *sshFxpExtendedPacketPosixRename) respond(s *Server) responsePacket {
-	err := os.Rename(p.Oldpath, p.Newpath)
+	var vfs avfs.VFS
+	err := vfs.Rename(p.Oldpath, p.Newpath)
 	return statusFromError(p.ID, err)
 }
 
@@ -1271,6 +1273,7 @@ func (p *sshFxpExtendedPacketHardlink) UnmarshalBinary(b []byte) error {
 }
 
 func (p *sshFxpExtendedPacketHardlink) respond(s *Server) responsePacket {
-	err := os.Link(p.Oldpath, p.Newpath)
+	var vfs avfs.VFS
+	err := vfs.Link(p.Oldpath, p.Newpath)
 	return statusFromError(p.ID, err)
 }

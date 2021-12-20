@@ -5,8 +5,8 @@ import (
 	"encoding"
 	"errors"
 	"io/ioutil"
-	"os"
 	"reflect"
+	"syscall"
 	"testing"
 )
 
@@ -376,7 +376,7 @@ func TestSendPacket(t *testing.T) {
 			packet: &sshFxpOpenPacket{
 				ID:     1,
 				Path:   "/foo",
-				Pflags: flags(os.O_RDONLY),
+				Pflags: flags(syscall.O_RDONLY),
 			},
 			want: []byte{
 				0x0, 0x0, 0x0, 0x15,
@@ -611,7 +611,7 @@ func BenchmarkMarshalOpen(b *testing.B) {
 	benchMarshal(b, &sshFxpOpenPacket{
 		ID:     1,
 		Path:   "/home/test/some/random/path",
-		Pflags: flags(os.O_RDONLY),
+		Pflags: flags(syscall.O_RDONLY),
 	})
 }
 

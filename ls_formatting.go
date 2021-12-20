@@ -3,7 +3,7 @@ package sftp
 import (
 	"errors"
 	"fmt"
-	"os"
+	"io/fs"
 	"os/user"
 	"strconv"
 	"time"
@@ -41,7 +41,7 @@ func (osIDLookup) LookupGroupName(gid string) string {
 
 // runLs formats the FileInfo as per `ls -l` style, which is in the 'longname' field of a SSH_FXP_NAME entry.
 // This is a fairly simple implementation, just enough to look close to openssh in simple cases.
-func runLs(idLookup NameLookupFileLister, dirent os.FileInfo) string {
+func runLs(idLookup NameLookupFileLister, dirent fs.FileInfo) string {
 	// example from openssh sftp server:
 	// crw-rw-rw-    1 root     wheel           0 Jul 31 20:52 ttyvd
 	// format:

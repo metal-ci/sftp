@@ -6,9 +6,11 @@ import (
 	"encoding"
 	"errors"
 	"fmt"
+	"github.com/avfs/avfs"
+	"github.com/avfs/avfs/vfs/osfs"
 	"io"
+	"io/fs"
 	"io/ioutil"
-	"os"
 	"path/filepath"
 	"strconv"
 	"sync"
@@ -30,12 +32,12 @@ type Server struct {
 	debugStream   io.Writer
 	readOnly      bool
 	pktMgr        *packetManager
-	openFiles     map[string]*os.File
+	openFiles     map[string]avfs.File
 	openFilesLock sync.RWMutex
 	handleCount   int
 }
 
-func (svr *Server) nextHandle(f *os.File) string {
+func (svr *Server) nextHandle(f avfs.File) string {
 	svr.openFilesLock.Lock()
 	defer svr.openFilesLock.Unlock()
 	svr.handleCount++
@@ -55,7 +57,7 @@ func (svr *Server) closeHandle(handle string) error {
 	return EBADF
 }
 
-func (svr *Server) getHandle(handle string) (*os.File, bool) {
+func (svr *Server) getHandle(handle string) (avfs.File, bool) {
 	svr.openFilesLock.RLock()
 	defer svr.openFilesLock.RUnlock()
 	f, ok := svr.openFiles[handle]
@@ -84,7 +86,7 @@ func NewServer(rwc io.ReadWriteCloser, options ...ServerOption) (*Server, error)
 		serverConn:  svrConn,
 		debugStream: ioutil.Discard,
 		pktMgr:      newPktMgr(svrConn),
-		openFiles:   make(map[string]*os.File),
+		openFiles:   make(map[string]avfs.File),
 	}
 
 	for _, o := range options {
@@ -165,6 +167,8 @@ func (svr *Server) sftpServerWorker(pktChan chan orderedRequest) error {
 
 func handlePacket(s *Server, p orderedRequest) error {
 	var rpkt responsePacket
+	var vfs avfs.VFS
+	vfs = osfs.New()
 	orderID := p.orderID()
 	switch p := p.requestPacket.(type) {
 	case *sshFxInitPacket:
@@ -174,7 +178,7 @@ func handlePacket(s *Server, p orderedRequest) error {
 		}
 	case *sshFxpStatPacket:
 		// stat the requested file
-		info, err := os.Stat(toLocalPath(p.Path))
+		info, err := vfs.Stat(toLocalPath(p.Path))
 		rpkt = &sshFxpStatResponse{
 			ID:   p.ID,
 			info: info,
@@ -184,7 +188,7 @@ func handlePacket(s *Server, p orderedRequest) error {
 		}
 	case *sshFxpLstatPacket:
 		// stat the requested file
-		info, err := os.Lstat(toLocalPath(p.Path))
+		info, err := vfs.Lstat(toLocalPath(p.Path))
 		rpkt = &sshFxpStatResponse{
 			ID:   p.ID,
 			info: info,
@@ -195,7 +199,7 @@ func handlePacket(s *Server, p orderedRequest) error {
 	case *sshFxpFstatPacket:
 		f, ok := s.getHandle(p.Handle)
 		var err error = EBADF
-		var info os.FileInfo
+		var info fs.FileInfo
 		if ok {
 			info, err = f.Stat()
 			rpkt = &sshFxpStatResponse{
@@ -208,24 +212,24 @@ func handlePacket(s *Server, p orderedRequest) error {
 		}
 	case *sshFxpMkdirPacket:
 		// TODO FIXME: ignore flags field
-		err := os.Mkdir(toLocalPath(p.Path), 0755)
+		err := vfs.Mkdir(toLocalPath(p.Path), 0755)
 		rpkt = statusFromError(p.ID, err)
 	case *sshFxpRmdirPacket:
-		err := os.Remove(toLocalPath(p.Path))
+		err := vfs.Remove(toLocalPath(p.Path))
 		rpkt = statusFromError(p.ID, err)
 	case *sshFxpRemovePacket:
-		err := os.Remove(toLocalPath(p.Filename))
+		err := vfs.Remove(toLocalPath(p.Filename))
 		rpkt = statusFromError(p.ID, err)
 	case *sshFxpRenamePacket:
-		err := os.Rename(toLocalPath(p.Oldpath), toLocalPath(p.Newpath))
+		err := vfs.Rename(toLocalPath(p.Oldpath), toLocalPath(p.Newpath))
 		rpkt = statusFromError(p.ID, err)
 	case *sshFxpSymlinkPacket:
-		err := os.Symlink(toLocalPath(p.Targetpath), toLocalPath(p.Linkpath))
+		err := vfs.Symlink(toLocalPath(p.Targetpath), toLocalPath(p.Linkpath))
 		rpkt = statusFromError(p.ID, err)
 	case *sshFxpClosePacket:
 		rpkt = statusFromError(p.ID, s.closeHandle(p.Handle))
 	case *sshFxpReadlinkPacket:
-		f, err := os.Readlink(toLocalPath(p.Path))
+		f, err := vfs.Readlink(toLocalPath(p.Path))
 		rpkt = &sshFxpNamePacket{
 			ID: p.ID,
 			NameAttrs: []*sshFxpNameAttr{
@@ -258,10 +262,10 @@ func handlePacket(s *Server, p orderedRequest) error {
 	case *sshFxpOpendirPacket:
 		p.Path = toLocalPath(p.Path)
 
-		if stat, err := os.Stat(p.Path); err != nil {
+		if stat, err := vfs.Stat(p.Path); err != nil {
 			rpkt = statusFromError(p.ID, err)
 		} else if !stat.IsDir() {
-			rpkt = statusFromError(p.ID, &os.PathError{
+			rpkt = statusFromError(p.ID, &fs.PathError{
 				Path: p.Path, Err: syscall.ENOTDIR})
 		} else {
 			rpkt = (&sshFxpOpenPacket{
@@ -384,7 +388,7 @@ func (p *sshFxInitPacket) id() uint32 { return 0 }
 
 type sshFxpStatResponse struct {
 	ID   uint32
-	info os.FileInfo
+	info fs.FileInfo
 }
 
 func (p *sshFxpStatResponse) marshalPacket() ([]byte, []byte, error) {
@@ -422,12 +426,14 @@ func (p *sshFxpOpenPacket) hasPflags(flags ...uint32) bool {
 
 func (p *sshFxpOpenPacket) respond(svr *Server) responsePacket {
 	var osFlags int
+	var vfs avfs.VFS
+	vfs = osfs.New()
 	if p.hasPflags(sshFxfRead, sshFxfWrite) {
-		osFlags |= os.O_RDWR
+		osFlags |= syscall.O_RDWR
 	} else if p.hasPflags(sshFxfWrite) {
-		osFlags |= os.O_WRONLY
+		osFlags |= syscall.O_WRONLY
 	} else if p.hasPflags(sshFxfRead) {
-		osFlags |= os.O_RDONLY
+		osFlags |= syscall.O_RDONLY
 	} else {
 		// how are they opening?
 		return statusFromError(p.ID, syscall.EINVAL)
@@ -437,16 +443,16 @@ func (p *sshFxpOpenPacket) respond(svr *Server) responsePacket {
 	// The sshFxfAppend flag is a no-op here as the client sends the offsets.
 
 	if p.hasPflags(sshFxfCreat) {
-		osFlags |= os.O_CREATE
+		osFlags |= syscall.O_CREAT
 	}
 	if p.hasPflags(sshFxfTrunc) {
-		osFlags |= os.O_TRUNC
+		osFlags |= syscall.O_TRUNC
 	}
 	if p.hasPflags(sshFxfExcl) {
-		osFlags |= os.O_EXCL
+		osFlags |= syscall.O_EXCL
 	}
 
-	f, err := os.OpenFile(toLocalPath(p.Path), osFlags, 0644)
+	f, err := vfs.OpenFile(toLocalPath(p.Path), osFlags, 0644)
 	if err != nil {
 		return statusFromError(p.ID, err)
 	}
@@ -461,7 +467,7 @@ func (p *sshFxpReaddirPacket) respond(svr *Server) responsePacket {
 		return statusFromError(p.ID, EBADF)
 	}
 
-	dirents, err := f.Readdir(128)
+	dirents, err := f.ReadDir(128)
 	if err != nil {
 		return statusFromError(p.ID, err)
 	}
@@ -470,10 +476,15 @@ func (p *sshFxpReaddirPacket) respond(svr *Server) responsePacket {
 
 	ret := &sshFxpNamePacket{ID: p.ID}
 	for _, dirent := range dirents {
+		fInfo, err := dirent.Info()
+		if err!=nil {
+			return statusFromError(p.ID, err)
+		}
+
 		ret.NameAttrs = append(ret.NameAttrs, &sshFxpNameAttr{
-			Name:     dirent.Name(),
-			LongName: runLs(idLookup, dirent),
-			Attrs:    []interface{}{dirent},
+			Name:     fInfo.Name(),
+			LongName: runLs(idLookup, fInfo),
+			Attrs:    []interface{}{fInfo},
 		})
 	}
 	return ret
@@ -481,6 +492,8 @@ func (p *sshFxpReaddirPacket) respond(svr *Server) responsePacket {
 
 func (p *sshFxpSetstatPacket) respond(svr *Server) responsePacket {
 	// additional unmarshalling is required for each possibility here
+	var vfs avfs.VFS
+	vfs = osfs.New()
 	b := p.Attrs.([]byte)
 	var err error
 
@@ -490,13 +503,13 @@ func (p *sshFxpSetstatPacket) respond(svr *Server) responsePacket {
 	if (p.Flags & sshFileXferAttrSize) != 0 {
 		var size uint64
 		if size, b, err = unmarshalUint64Safe(b); err == nil {
-			err = os.Truncate(p.Path, int64(size))
+			err = vfs.Truncate(p.Path, int64(size))
 		}
 	}
 	if (p.Flags & sshFileXferAttrPermissions) != 0 {
 		var mode uint32
 		if mode, b, err = unmarshalUint32Safe(b); err == nil {
-			err = os.Chmod(p.Path, os.FileMode(mode))
+			err = vfs.Chmod(p.Path, fs.FileMode(mode))
 		}
 	}
 	if (p.Flags & sshFileXferAttrACmodTime) != 0 {
@@ -507,7 +520,7 @@ func (p *sshFxpSetstatPacket) respond(svr *Server) responsePacket {
 		} else {
 			atimeT := time.Unix(int64(atime), 0)
 			mtimeT := time.Unix(int64(mtime), 0)
-			err = os.Chtimes(p.Path, atimeT, mtimeT)
+			err = vfs.Chtimes(p.Path, atimeT, mtimeT)
 		}
 	}
 	if (p.Flags & sshFileXferAttrUIDGID) != 0 {
@@ -516,7 +529,7 @@ func (p *sshFxpSetstatPacket) respond(svr *Server) responsePacket {
 		if uid, b, err = unmarshalUint32Safe(b); err != nil {
 		} else if gid, _, err = unmarshalUint32Safe(b); err != nil {
 		} else {
-			err = os.Chown(p.Path, int(uid), int(gid))
+			err = vfs.Chown(p.Path, int(uid), int(gid))
 		}
 	}
 
@@ -524,6 +537,8 @@ func (p *sshFxpSetstatPacket) respond(svr *Server) responsePacket {
 }
 
 func (p *sshFxpFsetstatPacket) respond(svr *Server) responsePacket {
+	var vfs avfs.VFS
+	vfs = osfs.New()
 	f, ok := svr.getHandle(p.Handle)
 	if !ok {
 		return statusFromError(p.ID, EBADF)
@@ -543,7 +558,7 @@ func (p *sshFxpFsetstatPacket) respond(svr *Server) responsePacket {
 	if (p.Flags & sshFileXferAttrPermissions) != 0 {
 		var mode uint32
 		if mode, b, err = unmarshalUint32Safe(b); err == nil {
-			err = f.Chmod(os.FileMode(mode))
+			err = f.Chmod(fs.FileMode(mode))
 		}
 	}
 	if (p.Flags & sshFileXferAttrACmodTime) != 0 {
@@ -554,7 +569,7 @@ func (p *sshFxpFsetstatPacket) respond(svr *Server) responsePacket {
 		} else {
 			atimeT := time.Unix(int64(atime), 0)
 			mtimeT := time.Unix(int64(mtime), 0)
-			err = os.Chtimes(f.Name(), atimeT, mtimeT)
+			err = vfs.Chtimes(f.Name(), atimeT, mtimeT)
 		}
 	}
 	if (p.Flags & sshFileXferAttrUIDGID) != 0 {
@@ -594,10 +609,6 @@ func statusFromError(id uint32, err error) *sshFxpStatusPacket {
 	ret.StatusError.Code = sshFxFailure
 	ret.StatusError.msg = err.Error()
 
-	if os.IsNotExist(err) {
-		ret.StatusError.Code = sshFxNoSuchFile
-		return ret
-	}
 	if code, ok := translateSyscallError(err); ok {
 		ret.StatusError.Code = code
 		return ret

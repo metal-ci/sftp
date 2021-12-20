@@ -5,6 +5,8 @@ package main
 import (
 	"flag"
 	"fmt"
+	"github.com/avfs/avfs"
+	"github.com/avfs/avfs/vfs/osfs"
 	"io"
 	"log"
 	"net"
@@ -32,6 +34,8 @@ func init() {
 
 func main() {
 	var auths []ssh.AuthMethod
+	var avfs avfs.VFS
+	avfs = osfs.New()
 	if aconn, err := net.Dial("unix", os.Getenv("SSH_AUTH_SOCK")); err == nil {
 		auths = append(auths, ssh.PublicKeysCallback(agent.NewClient(aconn).Signers))
 
@@ -64,7 +68,7 @@ func main() {
 	}
 	defer r.Close()
 
-	w, err := os.OpenFile("/dev/null", syscall.O_WRONLY, 0600)
+	w, err := avfs.OpenFile("/dev/null", syscall.O_WRONLY, 0600)
 	if err != nil {
 		log.Fatal(err)
 	}

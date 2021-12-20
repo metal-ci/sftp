@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
+	"io/fs"
 	"strings"
 	"sync"
 	"syscall"
@@ -491,7 +491,7 @@ func filelist(h FileLister, r *Request, pkt requestPacket) responsePacket {
 	}
 
 	offset := r.lsNext()
-	finfo := make([]os.FileInfo, MaxFilelist)
+	finfo := make([]fs.FileInfo, MaxFilelist)
 	n, err := lister.ListAt(finfo, offset)
 	r.lsInc(int64(n))
 	// ignore EOF as we only return it when there are no results
@@ -546,7 +546,7 @@ func filestat(h FileLister, r *Request, pkt requestPacket) responsePacket {
 	if err != nil {
 		return statusFromError(pkt.id(), err)
 	}
-	finfo := make([]os.FileInfo, 1)
+	finfo := make([]fs.FileInfo, 1)
 	n, err := lister.ListAt(finfo, 0)
 	finfo = finfo[:n] // avoid need for nil tests below
 
@@ -556,7 +556,7 @@ func filestat(h FileLister, r *Request, pkt requestPacket) responsePacket {
 			return statusFromError(pkt.id(), err)
 		}
 		if n == 0 {
-			err = &os.PathError{
+			err = &fs.PathError{
 				Op:   strings.ToLower(r.Method),
 				Path: r.Filepath,
 				Err:  syscall.ENOENT,
@@ -572,7 +572,7 @@ func filestat(h FileLister, r *Request, pkt requestPacket) responsePacket {
 			return statusFromError(pkt.id(), err)
 		}
 		if n == 0 {
-			err = &os.PathError{
+			err = &fs.PathError{
 				Op:   "readlink",
 				Path: r.Filepath,
 				Err:  syscall.ENOENT,

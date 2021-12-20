@@ -4,7 +4,7 @@
 package sftp
 
 import (
-	"os"
+	"io/fs"
 	"syscall"
 )
 
@@ -12,7 +12,7 @@ const EBADF = syscall.EBADF
 
 func wrapPathError(filepath string, err error) error {
 	if errno, ok := err.(syscall.Errno); ok {
-		return &os.PathError{Path: filepath, Err: errno}
+		return &fs.PathError{Path: filepath, Err: errno}
 	}
 	return err
 }
@@ -35,7 +35,7 @@ func translateSyscallError(err error) (uint32, bool) {
 	switch e := err.(type) {
 	case syscall.Errno:
 		return translateErrno(e), true
-	case *os.PathError:
+	case *fs.PathError:
 		debug("statusFromError,pathError: error is %T %#v", e.Err, e.Err)
 		if errno, ok := e.Err.(syscall.Errno); ok {
 			return translateErrno(errno), true
@@ -49,68 +49,68 @@ func isRegular(mode uint32) bool {
 	return mode&S_IFMT == syscall.S_IFREG
 }
 
-// toFileMode converts sftp filemode bits to the os.FileMode specification
-func toFileMode(mode uint32) os.FileMode {
-	var fm = os.FileMode(mode & 0777)
+// toFileMode converts sftp filemode bits to the fs.FileMode specification
+func toFileMode(mode uint32) fs.FileMode {
+	var fm = fs.FileMode(mode & 0777)
 
 	switch mode & S_IFMT {
 	case syscall.S_IFBLK:
-		fm |= os.ModeDevice
+		fm |= fs.ModeDevice
 	case syscall.S_IFCHR:
-		fm |= os.ModeDevice | os.ModeCharDevice
+		fm |= fs.ModeDevice | fs.ModeCharDevice
 	case syscall.S_IFDIR:
-		fm |= os.ModeDir
+		fm |= fs.ModeDir
 	case syscall.S_IFIFO:
-		fm |= os.ModeNamedPipe
+		fm |= fs.ModeNamedPipe
 	case syscall.S_IFLNK:
-		fm |= os.ModeSymlink
+		fm |= fs.ModeSymlink
 	case syscall.S_IFREG:
 		// nothing to do
 	case syscall.S_IFSOCK:
-		fm |= os.ModeSocket
+		fm |= fs.ModeSocket
 	}
 
 	if mode&syscall.S_ISUID != 0 {
-		fm |= os.ModeSetuid
+		fm |= fs.ModeSetuid
 	}
 	if mode&syscall.S_ISGID != 0 {
-		fm |= os.ModeSetgid
+		fm |= fs.ModeSetgid
 	}
 	if mode&syscall.S_ISVTX != 0 {
-		fm |= os.ModeSticky
+		fm |= fs.ModeSticky
 	}
 
 	return fm
 }
 
-// fromFileMode converts from the os.FileMode specification to sftp filemode bits
-func fromFileMode(mode os.FileMode) uint32 {
-	ret := uint32(mode & os.ModePerm)
+// fromFileMode converts from the fs.FileMode specification to sftp filemode bits
+func fromFileMode(mode fs.FileMode) uint32 {
+	ret := uint32(mode & fs.ModePerm)
 
-	switch mode & os.ModeType {
-	case os.ModeDevice | os.ModeCharDevice:
+	switch mode & fs.ModeType {
+	case fs.ModeDevice | fs.ModeCharDevice:
 		ret |= syscall.S_IFCHR
-	case os.ModeDevice:
+	case fs.ModeDevice:
 		ret |= syscall.S_IFBLK
-	case os.ModeDir:
+	case fs.ModeDir:
 		ret |= syscall.S_IFDIR
-	case os.ModeNamedPipe:
+	case fs.ModeNamedPipe:
 		ret |= syscall.S_IFIFO
-	case os.ModeSymlink:
+	case fs.ModeSymlink:
 		ret |= syscall.S_IFLNK
 	case 0:
 		ret |= syscall.S_IFREG
-	case os.ModeSocket:
+	case fs.ModeSocket:
 		ret |= syscall.S_IFSOCK
 	}
 
-	if mode&os.ModeSetuid != 0 {
+	if mode&fs.ModeSetuid != 0 {
 		ret |= syscall.S_ISUID
 	}
-	if mode&os.ModeSetgid != 0 {
+	if mode&fs.ModeSetgid != 0 {
 		ret |= syscall.S_ISGID
 	}
-	if mode&os.ModeSticky != 0 {
+	if mode&fs.ModeSticky != 0 {
 		ret |= syscall.S_ISVTX
 	}
 

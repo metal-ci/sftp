@@ -14,6 +14,8 @@ import (
 	"encoding/pem"
 	"flag"
 	"fmt"
+	"github.com/avfs/avfs"
+	"github.com/avfs/avfs/vfs/osfs"
 	"io/ioutil"
 	"math/rand"
 	"net"
@@ -25,6 +27,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -34,6 +37,8 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	var vfs avfs.VFS
+	vfs = osfs.New()
 	sftpClientLocation, _ := exec.LookPath("sftp")
 	testSftpClientBin = flag.String("sftp_client", sftpClientLocation, "location of the sftp client binary")
 
@@ -46,7 +51,7 @@ func TestMain(m *testing.M) {
 	sftpServer, _ := exec.LookPath("sftp-server")
 	if len(sftpServer) == 0 {
 		for _, location := range lookSFTPServer {
-			if _, err := os.Stat(location); err == nil {
+			if _, err := vfs.Stat(location); err == nil {
 				sftpServer = location
 				break
 			}
@@ -225,7 +230,7 @@ func (svr *sshServer) handleChanReq(chanReq ssh.NewChannel) {
 		} else {
 			chsvr := &sshSessionChannelServer{
 				sshChannelServer: &sshChannelServer{svr, chanReq, ch, reqs},
-				env:              append([]string{}, os.Environ()...),
+				env:              append([]string{}, syscall.Environ()...),
 			}
 			chsvr.handle()
 		}
@@ -407,6 +412,8 @@ func testServer(t *testing.T, useSubsystem bool, readonly bool) (net.Listener, s
 }
 
 func makeDummyKey() (string, error) {
+	var vfs avfs.VFS
+	vfs = osfs.New()
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), crand.Reader)
 	if err != nil {
 		return "", fmt.Errorf("cannot generate key: %w", err)
@@ -423,7 +430,7 @@ func makeDummyKey() (string, error) {
 	defer func() {
 		if f != nil {
 			_ = f.Close()
-			_ = os.Remove(f.Name())
+			_ = vfs.Remove(f.Name())
 		}
 	}()
 	if err := pem.Encode(f, block); err != nil {
@@ -456,8 +463,10 @@ func (e *execError) Cause() error {
 }
 
 func runSftpClient(t *testing.T, script string, path string, host string, port int) (string, error) {
+	var vfs avfs.VFS
+	vfs = osfs.New()
 	// if sftp client binary is unavailable, skip test
-	if _, err := os.Stat(*testSftpClientBin); err != nil {
+	if _, err := vfs.Stat(*testSftpClientBin); err != nil {
 		t.Skip("sftp client binary unavailable")
 	}
 
@@ -466,7 +475,7 @@ func runSftpClient(t *testing.T, script string, path string, host string, port i
 	if err != nil {
 		return "", err
 	}
-	defer os.Remove(dummyKey)
+	defer vfs.Remove(dummyKey)
 
 	args := []string{
 		// "-vvvv",
@@ -608,10 +617,12 @@ func randName() string {
 
 func TestServerMkdirRmdir(t *testing.T) {
 	listenerGo, hostGo, portGo := testServer(t, GolangSFTP, READONLY)
+	var vfs avfs.VFS
+	vfs = osfs.New()
 	defer listenerGo.Close()
 
 	tmpDir := "/tmp/" + randName()
-	defer os.RemoveAll(tmpDir)
+	defer vfs.RemoveAll(tmpDir)
 
 	// mkdir remote
 	if _, err := runSftpClient(t, "mkdir "+tmpDir, "/", hostGo, portGo); err != nil {
@@ -619,7 +630,7 @@ func TestServerMkdirRmdir(t *testing.T) {
 	}
 
 	// directory should now exist
-	if _, err := os.Stat(tmpDir); err != nil {
+	if _, err := vfs.Stat(tmpDir); err != nil {
 		t.Fatal(err)
 	}
 
@@ -628,12 +639,14 @@ func TestServerMkdirRmdir(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := os.Stat(tmpDir); err == nil {
+	if _, err := vfs.Stat(tmpDir); err == nil {
 		t.Fatal("should have error after deleting the directory")
 	}
 }
 
 func TestServerLink(t *testing.T) {
+	var vfs avfs.VFS
+	vfs = osfs.New()
 	skipIfWindows(t) // No hard links on windows.
 	listenerGo, hostGo, portGo := testServer(t, GolangSFTP, READONLY)
 	defer listenerGo.Close()
@@ -641,13 +654,13 @@ func TestServerLink(t *testing.T) {
 	tmpFileLocalData := randData(999)
 
 	linkdest := "/tmp/" + randName()
-	defer os.RemoveAll(linkdest)
+	defer vfs.RemoveAll(linkdest)
 	if err := ioutil.WriteFile(linkdest, tmpFileLocalData, 0644); err != nil {
 		t.Fatal(err)
 	}
 
 	link := "/tmp/" + randName()
-	defer os.RemoveAll(link)
+	defer vfs.RemoveAll(link)
 
 	// now create a hard link within the new directory
 	if output, err := runSftpClient(t, fmt.Sprintf("ln %s %s", linkdest, link), "/", hostGo, portGo); err != nil {
@@ -655,7 +668,7 @@ func TestServerLink(t *testing.T) {
 	}
 
 	// file should now exist and be the same size as linkdest
-	if stat, err := os.Lstat(link); err != nil {
+	if stat, err := vfs.Lstat(link); err != nil {
 		t.Fatal(err)
 	} else if int(stat.Size()) != len(tmpFileLocalData) {
 		t.Fatalf("wrong size: %v", len(tmpFileLocalData))
@@ -665,10 +678,12 @@ func TestServerLink(t *testing.T) {
 func TestServerSymlink(t *testing.T) {
 	skipIfWindows(t) // No symlinks on windows.
 	listenerGo, hostGo, portGo := testServer(t, GolangSFTP, READONLY)
+	var vfs avfs.VFS
+	vfs = osfs.New()
 	defer listenerGo.Close()
 
 	link := "/tmp/" + randName()
-	defer os.RemoveAll(link)
+	defer vfs.RemoveAll(link)
 
 	// now create a symbolic link within the new directory
 	if output, err := runSftpClient(t, "symlink /bin/sh "+link, "/", hostGo, portGo); err != nil {
@@ -676,7 +691,7 @@ func TestServerSymlink(t *testing.T) {
 	}
 
 	// symlink should now exist
-	if stat, err := os.Lstat(link); err != nil {
+	if stat, err := vfs.Lstat(link); err != nil {
 		t.Fatal(err)
 	} else if (stat.Mode() & os.ModeSymlink) != os.ModeSymlink {
 		t.Fatalf("is not a symlink: %v", stat.Mode())
@@ -685,12 +700,14 @@ func TestServerSymlink(t *testing.T) {
 
 func TestServerPut(t *testing.T) {
 	listenerGo, hostGo, portGo := testServer(t, GolangSFTP, READONLY)
+	var vfs avfs.VFS
+	vfs = osfs.New()
 	defer listenerGo.Close()
 
 	tmpFileLocal := "/tmp/" + randName()
 	tmpFileRemote := "/tmp/" + randName()
-	defer os.RemoveAll(tmpFileLocal)
-	defer os.RemoveAll(tmpFileRemote)
+	defer vfs.RemoveAll(tmpFileLocal)
+	defer vfs.RemoveAll(tmpFileRemote)
 
 	t.Logf("put: local %v remote %v", tmpFileLocal, tmpFileRemote)
 
@@ -715,12 +732,14 @@ func TestServerPut(t *testing.T) {
 
 func TestServerResume(t *testing.T) {
 	listenerGo, hostGo, portGo := testServer(t, GolangSFTP, READONLY)
+	var vfs avfs.VFS
+	vfs = osfs.New()
 	defer listenerGo.Close()
 
 	tmpFileLocal := "/tmp/" + randName()
 	tmpFileRemote := "/tmp/" + randName()
-	defer os.RemoveAll(tmpFileLocal)
-	defer os.RemoveAll(tmpFileRemote)
+	defer vfs.RemoveAll(tmpFileLocal)
+	defer vfs.RemoveAll(tmpFileRemote)
 
 	t.Logf("put: local %v remote %v", tmpFileLocal, tmpFileRemote)
 
@@ -762,12 +781,14 @@ func TestServerResume(t *testing.T) {
 
 func TestServerGet(t *testing.T) {
 	listenerGo, hostGo, portGo := testServer(t, GolangSFTP, READONLY)
+	var vfs avfs.VFS
+	vfs = osfs.New()
 	defer listenerGo.Close()
 
 	tmpFileLocal := "/tmp/" + randName()
 	tmpFileRemote := "/tmp/" + randName()
-	defer os.RemoveAll(tmpFileLocal)
-	defer os.RemoveAll(tmpFileRemote)
+	defer vfs.RemoveAll(tmpFileLocal)
+	defer vfs.RemoveAll(tmpFileRemote)
 
 	t.Logf("get: local %v remote %v", tmpFileLocal, tmpFileRemote)
 
@@ -792,6 +813,8 @@ func TestServerGet(t *testing.T) {
 
 func compareDirectoriesRecursive(t *testing.T, aroot, broot string) {
 	walker := fs.Walk(aroot)
+	var vfs avfs.VFS
+	vfs = osfs.New()
 	for walker.Step() {
 		if err := walker.Err(); err != nil {
 			t.Fatal(err)
@@ -811,7 +834,7 @@ func compareDirectoriesRecursive(t *testing.T, aroot, broot string) {
 		//t.Logf("comparing: %v a: %v b %v", aRel, aPath, bPath)
 
 		// if a is a link, the sftp recursive copy won't have copied it. ignore
-		aLink, err := os.Lstat(aPath)
+		aLink, err := vfs.Lstat(aPath)
 		if err != nil {
 			t.Fatalf("could not lstat %v: %v", aPath, err)
 		}
@@ -820,11 +843,11 @@ func compareDirectoriesRecursive(t *testing.T, aroot, broot string) {
 		}
 
 		// stat the files
-		aFile, err := os.Stat(aPath)
+		aFile, err := vfs.Stat(aPath)
 		if err != nil {
 			t.Fatalf("could not stat %v: %v", aPath, err)
 		}
-		bFile, err := os.Stat(bPath)
+		bFile, err := vfs.Stat(bPath)
 		if err != nil {
 			t.Fatalf("could not stat %v: %v", bPath, err)
 		}
@@ -858,14 +881,16 @@ func compareDirectoriesRecursive(t *testing.T, aroot, broot string) {
 
 func TestServerPutRecursive(t *testing.T) {
 	listenerGo, hostGo, portGo := testServer(t, GolangSFTP, READONLY)
+	var vfs avfs.VFS
+	vfs = osfs.New()
 	defer listenerGo.Close()
 
-	dirLocal, err := os.Getwd()
+	dirLocal, err := vfs.Getwd()
 	if err != nil {
 		t.Fatal(err)
 	}
 	tmpDirRemote := "/tmp/" + randName()
-	defer os.RemoveAll(tmpDirRemote)
+	defer vfs.RemoveAll(tmpDirRemote)
 
 	t.Logf("put recursive: local %v remote %v", dirLocal, tmpDirRemote)
 
@@ -879,14 +904,16 @@ func TestServerPutRecursive(t *testing.T) {
 
 func TestServerGetRecursive(t *testing.T) {
 	listenerGo, hostGo, portGo := testServer(t, GolangSFTP, READONLY)
+	var vfs avfs.VFS
+	vfs = osfs.New()
 	defer listenerGo.Close()
 
-	dirRemote, err := os.Getwd()
+	dirRemote, err := vfs.Getwd()
 	if err != nil {
 		t.Fatal(err)
 	}
 	tmpDirLocal := "/tmp/" + randName()
-	defer os.RemoveAll(tmpDirLocal)
+	defer vfs.RemoveAll(tmpDirLocal)
 
 	t.Logf("get recursive: local %v remote %v", tmpDirLocal, dirRemote)
 

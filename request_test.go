@@ -3,6 +3,8 @@ package sftp
 import (
 	"bytes"
 	"errors"
+	"github.com/avfs/avfs"
+	"github.com/avfs/avfs/vfs/osfs"
 	"io"
 	"os"
 	"testing"
@@ -38,11 +40,13 @@ func (t *testHandler) Filecmd(r *Request) error {
 }
 
 func (t *testHandler) Filelist(r *Request) (ListerAt, error) {
+	var vfs avfs.VFS
+	vfs = osfs.New()
 	if t.err != nil {
 		return nil, t.err
 	}
 	_ = r.WithContext(r.Context()) // initialize context for deadlock testing
-	f, err := os.Open(r.Filepath)
+	f, err := vfs.Open(r.Filepath)
 	if err != nil {
 		return nil, err
 	}

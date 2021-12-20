@@ -2,13 +2,18 @@ package sftp
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"github.com/avfs/avfs"
+	"github.com/avfs/avfs/vfs/osfs"
 	"io"
+	"io/fs"
 	"io/ioutil"
 	"net"
 	"os"
 	"path"
 	"runtime"
+	"syscall"
 	"testing"
 	"time"
 
@@ -26,9 +31,11 @@ type csPair struct {
 
 // these must be closed in order, else client.Close will hang
 func (cs csPair) Close() {
+	var vfs avfs.VFS
+	vfs = osfs.New()
 	cs.svr.Close()
 	cs.cli.Close()
-	os.Remove(sock)
+	vfs.Remove(sock)
 }
 
 func (cs csPair) testHandler() *root {
@@ -38,12 +45,14 @@ func (cs csPair) testHandler() *root {
 const sock = "/tmp/rstest.sock"
 
 func clientRequestServerPair(t *testing.T) *csPair {
+	var vfs avfs.VFS
+	vfs = osfs.New()
 	skipIfWindows(t)
 	skipIfPlan9(t)
 
 	ready := make(chan struct{})
 	canReturn := make(chan struct{})
-	os.Remove(sock) // either this or signal handling
+	vfs.Remove(sock) // either this or signal handling
 	pair := &csPair{
 		svrResult: make(chan error, 1),
 	}
@@ -75,7 +84,7 @@ func clientRequestServerPair(t *testing.T) *csPair {
 	}()
 
 	<-ready
-	defer os.Remove(sock)
+	defer vfs.Remove(sock)
 
 	c, err := net.Dial("unix", sock)
 	require.NoError(t, err)
@@ -206,7 +215,7 @@ func TestRequestWriteEmpty(t *testing.T) {
 	assert.False(t, f.isdir)
 	assert.Len(t, f.content, 0)
 	// lets test with an error
-	r.returnErr(os.ErrInvalid)
+	r.returnErr(fs.ErrInvalid)
 	n, err = putTestFile(p.cli, "/bar", "")
 	require.Error(t, err)
 	r.returnErr(nil)
@@ -250,7 +259,8 @@ func TestRequestOpenFail(t *testing.T) {
 	p := clientRequestServerPair(t)
 	defer p.Close()
 	rf, err := p.cli.Open("/foo")
-	assert.Exactly(t, os.ErrNotExist, err)
+	assert.Exactly(t, &StatusError{Code: sshFxFailure,
+		msg: "file does not exist"}, err)
 	assert.Nil(t, rf)
 	// if we return an error the sftp client will not close the handle
 	// ensure that we close it ourself
@@ -272,7 +282,7 @@ func TestRequestReadAndWrite(t *testing.T) {
 	p := clientRequestServerPair(t)
 	defer p.Close()
 
-	file, err := p.cli.OpenFile("/foo", os.O_RDWR|os.O_CREATE)
+	file, err := p.cli.OpenFile("/foo", syscall.O_RDWR|syscall.O_CREAT)
 	require.NoError(t, err)
 	defer file.Close()
 
@@ -294,12 +304,12 @@ func TestOpenFileExclusive(t *testing.T) {
 	defer p.Close()
 
 	// first open should work
-	file, err := p.cli.OpenFile("/foo", os.O_RDWR|os.O_CREATE|os.O_EXCL)
+	file, err := p.cli.OpenFile("/foo", syscall.O_RDWR|syscall.O_CREAT|syscall.O_EXCL)
 	require.NoError(t, err)
 	file.Close()
 
 	// second open should return error
-	_, err = p.cli.OpenFile("/foo", os.O_RDWR|os.O_CREATE|os.O_EXCL)
+	_, err = p.cli.OpenFile("/foo", syscall.O_RDWR|syscall.O_CREAT|syscall.O_EXCL)
 	assert.Error(t, err)
 
 	checkRequestServerAllocator(t, p)
@@ -318,13 +328,13 @@ func TestOpenFileExclusiveNoSymlinkFollowing(t *testing.T) {
 	require.NoError(t, err)
 
 	// with O_EXCL, we can follow directory symlinks
-	file, err := p.cli.OpenFile("/foo2/bar", os.O_RDWR|os.O_CREATE|os.O_EXCL)
+	file, err := p.cli.OpenFile("/foo2/bar", syscall.O_RDWR|syscall.O_CREAT|syscall.O_EXCL)
 	require.NoError(t, err)
 	err = file.Close()
 	require.NoError(t, err)
 
 	// we should have created the file above; and this create should fail.
-	_, err = p.cli.OpenFile("/foo/bar", os.O_RDWR|os.O_CREATE|os.O_EXCL)
+	_, err = p.cli.OpenFile("/foo/bar", syscall.O_RDWR|syscall.O_CREAT|syscall.O_EXCL)
 	require.Error(t, err)
 
 	// create a dangling symlink
@@ -332,7 +342,7 @@ func TestOpenFileExclusiveNoSymlinkFollowing(t *testing.T) {
 	require.NoError(t, err)
 
 	// opening a dangling symlink with O_CREATE and O_EXCL should fail, regardless of target not existing.
-	_, err = p.cli.OpenFile("/bar", os.O_RDWR|os.O_CREATE|os.O_EXCL)
+	_, err = p.cli.OpenFile("/bar", syscall.O_RDWR|syscall.O_CREAT|syscall.O_EXCL)
 	require.Error(t, err)
 
 	checkRequestServerAllocator(t, p)
@@ -361,7 +371,7 @@ func TestRequestRemove(t *testing.T) {
 	err = p.cli.Remove("/foo")
 	assert.NoError(t, err)
 	_, err = r.fetch("/foo")
-	assert.Equal(t, err, os.ErrNotExist)
+	assert.Equal(t, err, fs.ErrNotExist)
 	checkRequestServerAllocator(t, p)
 }
 
@@ -442,7 +452,7 @@ func TestRequestStat(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "foo", fi.Name())
 	assert.Equal(t, int64(5), fi.Size())
-	assert.Equal(t, os.FileMode(0644), fi.Mode())
+	assert.Equal(t, fs.FileMode(0644), fi.Mode())
 	assert.NoError(t, testOsSys(fi.Sys()))
 	checkRequestServerAllocator(t, p)
 }
@@ -454,14 +464,14 @@ func TestRequestSetstat(t *testing.T) {
 	defer p.Close()
 	_, err := putTestFile(p.cli, "/foo", "hello")
 	require.NoError(t, err)
-	mode := os.FileMode(0644)
+	mode := fs.FileMode(0644)
 	err = p.cli.Chmod("/foo", mode)
 	require.NoError(t, err)
 	fi, err := p.cli.Stat("/foo")
 	require.NoError(t, err)
 	assert.Equal(t, "foo", fi.Name())
 	assert.Equal(t, int64(5), fi.Size())
-	assert.Equal(t, os.FileMode(0644), fi.Mode())
+	assert.Equal(t, fs.FileMode(0644), fi.Mode())
 	assert.NoError(t, testOsSys(fi.Sys()))
 	checkRequestServerAllocator(t, p)
 }
@@ -477,7 +487,7 @@ func TestRequestFstat(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "foo", fi.Name())
 	assert.Equal(t, int64(5), fi.Size())
-	assert.Equal(t, os.FileMode(0644), fi.Mode())
+	assert.Equal(t, fs.FileMode(0644), fi.Mode())
 	assert.NoError(t, testOsSys(fi.Sys()))
 	checkRequestServerAllocator(t, p)
 }
@@ -487,7 +497,7 @@ func TestRequestFsetstat(t *testing.T) {
 	defer p.Close()
 	_, err := putTestFile(p.cli, "/foo", "hello")
 	require.NoError(t, err)
-	fp, err := p.cli.OpenFile("/foo", os.O_WRONLY)
+	fp, err := p.cli.OpenFile("/foo", syscall.O_WRONLY)
 	require.NoError(t, err)
 	err = fp.Truncate(2)
 	require.NoError(t, err)
@@ -519,7 +529,7 @@ func TestRequestStatFail(t *testing.T) {
 	defer p.Close()
 	fi, err := p.cli.Stat("/foo")
 	assert.Nil(t, fi)
-	assert.True(t, os.IsNotExist(err))
+	assert.True(t, !errors.Is(err,fs.ErrExist))
 	checkRequestServerAllocator(t, p)
 }
 
@@ -532,7 +542,7 @@ func TestRequestLstat(t *testing.T) {
 	require.NoError(t, err)
 	fi, err := p.cli.Lstat("/bar")
 	require.NoError(t, err)
-	assert.True(t, fi.Mode()&os.ModeSymlink == os.ModeSymlink)
+	assert.True(t, fi.Mode()&fs.ModeSymlink == fs.ModeSymlink)
 	checkRequestServerAllocator(t, p)
 }
 
@@ -558,7 +568,7 @@ func TestRequestLinkFail(t *testing.T) {
 	defer p.Close()
 	err := p.cli.Link("/foo", "/bar")
 	t.Log(err)
-	assert.True(t, os.IsNotExist(err))
+	assert.True(t, !errors.Is(err,fs.ErrExist))
 	checkRequestServerAllocator(t, p)
 }
 
@@ -578,11 +588,11 @@ func TestRequestSymlink(t *testing.T) {
 
 	fi, err := r.lfetch("/bar")
 	require.NoError(t, err)
-	assert.True(t, fi.Mode()&os.ModeSymlink == os.ModeSymlink)
+	assert.True(t, fi.Mode()&fs.ModeSymlink == fs.ModeSymlink)
 
 	fi, err = r.lfetch("/baz")
 	require.NoError(t, err)
-	assert.True(t, fi.Mode()&os.ModeSymlink == os.ModeSymlink)
+	assert.True(t, fi.Mode()&fs.ModeSymlink == fs.ModeSymlink)
 
 	content, err := getTestFile(p.cli, "/baz")
 	require.NoError(t, err)
@@ -645,9 +655,9 @@ func TestRequestSymlinkDanglingFiles(t *testing.T) {
 	err = p.cli.Symlink("/dangle", "/bar/bar")
 	require.Error(t, err)
 
-	// opening a dangling link without O_CREATE should fail with os.IsNotExist == true
-	_, err = p.cli.OpenFile("/bar", os.O_RDONLY)
-	require.True(t, os.IsNotExist(err))
+	// opening a dangling link without O_CREATE should fail with err.IsNotExist == true
+	_, err = p.cli.OpenFile("/bar", syscall.O_RDONLY)
+	require.True(t, !errors.Is(err,fs.ErrExist))
 
 	// overwriting a symlink is not allowed.
 	err = p.cli.Symlink("/dangle", "/bar")
@@ -683,7 +693,7 @@ func TestRequestSymlinkDanglingDirectories(t *testing.T) {
 
 	// reading from a dangling symlink should fail.
 	_, err = p.cli.ReadDir("/bar")
-	require.True(t, os.IsNotExist(err))
+	require.True(t, !errors.Is(err, fs.ErrExist))
 
 	// making a directory on a dangling symlink SHOULD NOT work.
 	err = p.cli.Mkdir("/bar")
@@ -733,7 +743,8 @@ func TestRequestReaddir(t *testing.T) {
 	assert.Equal(t, &StatusError{Code: sshFxFailure,
 		msg: " /foo_01: not a directory"}, err)
 	_, err = p.cli.ReadDir("/does_not_exist")
-	assert.Equal(t, os.ErrNotExist, err)
+	assert.Equal(t, &StatusError{Code: sshFxFailure,
+		msg: "file does not exist"}, err)
 	di, err := p.cli.ReadDir("/")
 	require.NoError(t, err)
 	require.Len(t, di, 100)
@@ -776,7 +787,7 @@ func TestRequestStatVFSError(t *testing.T) {
 
 	_, err := p.cli.StatVFS("a missing path")
 	require.Error(t, err)
-	require.True(t, os.IsNotExist(err))
+	require.True(t, !errors.Is(err, fs.ErrExist))
 
 	checkRequestServerAllocator(t, p)
 }

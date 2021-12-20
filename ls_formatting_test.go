@@ -1,7 +1,8 @@
 package sftp
 
 import (
-	"os"
+	"github.com/avfs/avfs"
+	"github.com/avfs/avfs/vfs/osfs"
 	"regexp"
 	"strings"
 	"testing"
@@ -14,29 +15,37 @@ const (
 )
 
 func TestRunLsWithExamplesDirectory(t *testing.T) {
+	var vfs avfs.VFS
+	vfs = osfs.New()
 	path := "examples"
-	item, _ := os.Stat(path)
+	item, _ := vfs.Stat(path)
 	result := runLs(nil, item)
 	runLsTestHelper(t, result, typeDirectory, path)
 }
 
 func TestRunLsWithLicensesFile(t *testing.T) {
 	path := "LICENSE"
-	item, _ := os.Stat(path)
+	var vfs avfs.VFS
+	vfs = osfs.New()
+	item, _ := vfs.Stat(path)
 	result := runLs(nil, item)
 	runLsTestHelper(t, result, typeFile, path)
 }
 
 func TestRunLsWithExamplesDirectoryWithOSLookup(t *testing.T) {
+	var vfs avfs.VFS
+	vfs = osfs.New()
 	path := "examples"
-	item, _ := os.Stat(path)
+	item, _ := vfs.Stat(path)
 	result := runLs(osIDLookup{}, item)
 	runLsTestHelper(t, result, typeDirectory, path)
 }
 
 func TestRunLsWithLicensesFileWithOSLookup(t *testing.T) {
+	var vfs avfs.VFS
+	vfs = osfs.New()
 	path := "LICENSE"
-	item, _ := os.Stat(path)
+	item, _ := vfs.Stat(path)
 	result := runLs(osIDLookup{}, item)
 	runLsTestHelper(t, result, typeFile, path)
 }

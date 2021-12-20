@@ -246,9 +246,9 @@ func NewClientPipe(rd io.Reader, wr io.WriteCloser, opts ...ClientOption) (*Clie
 //
 // Note that some SFTP servers (eg. AWS Transfer) do not support opening files
 // read/write at the same time. For those services you will need to use
-// `client.OpenFile(os.O_WRONLY|os.O_CREATE|os.O_TRUNC)`.
+// `client.OpenFile(syscall.O_WRONLY|syscall.O_CREATE|syscall.O_TRUNC)`.
 func (c *Client) Create(path string) (*File, error) {
-	return c.open(path, flags(os.O_RDWR|os.O_CREATE|os.O_TRUNC))
+	return c.open(path, flags(syscall.O_RDWR|syscall.O_CREAT|syscall.O_TRUNC))
 }
 
 const sftpProtocolVersion = 3 // http://tools.ietf.org/html/draft-ietf-secsh-filexfer-02
@@ -567,7 +567,7 @@ func (c *Client) Truncate(path string, size int64) error {
 // returned file can be used for reading; the associated file descriptor
 // has mode O_RDONLY.
 func (c *Client) Open(path string) (*File, error) {
-	return c.open(path, flags(os.O_RDONLY))
+	return c.open(path, flags(syscall.O_RDONLY))
 }
 
 // OpenFile is the generalized open call; most users will use Open or
@@ -717,15 +717,11 @@ func (c *Client) Remove(path string) error {
 	err := c.removeFile(path)
 	// some servers, *cough* osx *cough*, return EPERM, not ENODIR.
 	// serv-u returns ssh_FX_FILE_IS_A_DIRECTORY
-	// EPERM is converted to os.ErrPermission so it is not a StatusError
 	if err, ok := err.(*StatusError); ok {
 		switch err.Code {
 		case sshFxFailure, sshFxFileIsADirectory:
 			return c.RemoveDirectory(path)
 		}
-	}
-	if os.IsPermission(err) {
-		return c.RemoveDirectory(path)
 	}
 	return err
 }
@@ -1889,25 +1885,25 @@ func normaliseError(err error) error {
 // Unsupported flags are ignored.
 func flags(f int) uint32 {
 	var out uint32
-	switch f & os.O_WRONLY {
-	case os.O_WRONLY:
+	switch f & syscall.O_WRONLY {
+	case syscall.O_WRONLY:
 		out |= sshFxfWrite
-	case os.O_RDONLY:
+	case syscall.O_RDONLY:
 		out |= sshFxfRead
 	}
-	if f&os.O_RDWR == os.O_RDWR {
+	if f&syscall.O_RDWR == syscall.O_RDWR {
 		out |= sshFxfRead | sshFxfWrite
 	}
-	if f&os.O_APPEND == os.O_APPEND {
+	if f&syscall.O_APPEND == syscall.O_APPEND {
 		out |= sshFxfAppend
 	}
-	if f&os.O_CREATE == os.O_CREATE {
+	if f&syscall.O_CREAT == syscall.O_CREAT {
 		out |= sshFxfCreat
 	}
-	if f&os.O_TRUNC == os.O_TRUNC {
+	if f&syscall.O_TRUNC == syscall.O_TRUNC {
 		out |= sshFxfTrunc
 	}
-	if f&os.O_EXCL == os.O_EXCL {
+	if f&syscall.O_EXCL == syscall.O_EXCL {
 		out |= sshFxfExcl
 	}
 	return out
