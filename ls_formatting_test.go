@@ -1,12 +1,12 @@
 package sftp
 
 import (
-	"github.com/avfs/avfs"
-	"github.com/avfs/avfs/vfs/osfs"
 	"regexp"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/pkg/sftp/internal/apis"
 )
 
 const (
@@ -15,37 +15,33 @@ const (
 )
 
 func TestRunLsWithExamplesDirectory(t *testing.T) {
-	var vfs avfs.VFS
-	vfs = osfs.New()
+	fsApi := apis.NewAVFS()
 	path := "examples"
-	item, _ := vfs.Stat(path)
+	item, _ := fsApi.Stat(path)
 	result := runLs(nil, item)
 	runLsTestHelper(t, result, typeDirectory, path)
 }
 
 func TestRunLsWithLicensesFile(t *testing.T) {
 	path := "LICENSE"
-	var vfs avfs.VFS
-	vfs = osfs.New()
-	item, _ := vfs.Stat(path)
+	fsApi := apis.NewAVFS()
+	item, _ := fsApi.Stat(path)
 	result := runLs(nil, item)
 	runLsTestHelper(t, result, typeFile, path)
 }
 
 func TestRunLsWithExamplesDirectoryWithOSLookup(t *testing.T) {
-	var vfs avfs.VFS
-	vfs = osfs.New()
+	fsApi := apis.NewAVFS()
 	path := "examples"
-	item, _ := vfs.Stat(path)
+	item, _ := fsApi.Stat(path)
 	result := runLs(osIDLookup{}, item)
 	runLsTestHelper(t, result, typeDirectory, path)
 }
 
 func TestRunLsWithLicensesFileWithOSLookup(t *testing.T) {
-	var vfs avfs.VFS
-	vfs = osfs.New()
+	fsApi := apis.NewAVFS()
 	path := "LICENSE"
-	item, _ := vfs.Stat(path)
+	item, _ := fsApi.Stat(path)
 	result := runLs(osIDLookup{}, item)
 	runLsTestHelper(t, result, typeFile, path)
 }

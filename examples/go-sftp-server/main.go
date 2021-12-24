@@ -12,6 +12,8 @@ import (
 	"net"
 	"os"
 
+	"github.com/pkg/sftp/internal/apis"
+
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 )
@@ -25,7 +27,7 @@ func main() {
 	)
 
 	flag.BoolVar(&readOnly, "R", false, "read-only server")
-	flag.BoolVar(&debugStderr, "e", false, "debug to stderr")
+	flag.BoolVar(&debugStderr, "e", true, "debug to stderr")
 	flag.Parse()
 
 	debugStream := ioutil.Discard
@@ -132,6 +134,7 @@ func main() {
 
 		server, err := sftp.NewServer(
 			channel,
+			apis.NewAVFS(),
 			serverOptions...,
 		)
 		if err != nil {

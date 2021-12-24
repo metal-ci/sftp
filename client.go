@@ -5,8 +5,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	iofs "io/fs"
 	"math"
-	"os"
 	"path"
 	"sync"
 	"sync/atomic"
@@ -309,13 +309,13 @@ func (c *Client) Walk(root string) *fs.Walker {
 
 // ReadDir reads the directory named by dirname and returns a list of
 // directory entries.
-func (c *Client) ReadDir(p string) ([]os.FileInfo, error) {
+func (c *Client) ReadDir(p string) ([]iofs.FileInfo, error) {
 	handle, err := c.opendir(p)
 	if err != nil {
 		return nil, err
 	}
 	defer c.close(handle) // this has to defer earlier than the lock below
-	var attrs []os.FileInfo
+	var attrs []iofs.FileInfo
 	var done = false
 	for !done {
 		id := c.nextID()
@@ -386,7 +386,7 @@ func (c *Client) opendir(path string) (string, error) {
 
 // Stat returns a FileInfo structure describing the file specified by path 'p'.
 // If 'p' is a symbolic link, the returned FileInfo structure describes the referent file.
-func (c *Client) Stat(p string) (os.FileInfo, error) {
+func (c *Client) Stat(p string) (iofs.FileInfo, error) {
 	fs, err := c.stat(p)
 	if err != nil {
 		return nil, err
@@ -396,7 +396,7 @@ func (c *Client) Stat(p string) (os.FileInfo, error) {
 
 // Lstat returns a FileInfo structure describing the file specified by path 'p'.
 // If 'p' is a symbolic link, the returned FileInfo structure describes the symbolic link.
-func (c *Client) Lstat(p string) (os.FileInfo, error) {
+func (c *Client) Lstat(p string) (iofs.FileInfo, error) {
 	id := c.nextID()
 	typ, data, err := c.sendPacket(nil, &sshFxpLstatPacket{
 		ID:   id,
@@ -551,7 +551,7 @@ func (c *Client) Chown(path string, uid, gid int) error {
 // Chmod does not apply a umask, because even retrieving the umask is not
 // possible in a portable way without causing a race condition. Callers
 // should mask off umask bits, if desired.
-func (c *Client) Chmod(path string, mode os.FileMode) error {
+func (c *Client) Chmod(path string, mode iofs.FileMode) error {
 	return c.setstat(path, sshFileXferAttrPermissions, toChmodPerm(mode))
 }
 
@@ -870,7 +870,7 @@ func (c *Client) MkdirAll(path string) error {
 		if dir.IsDir() {
 			return nil
 		}
-		return &os.PathError{Op: "mkdir", Path: path, Err: syscall.ENOTDIR}
+		return &iofs.PathError{Op: "mkdir", Path: path, Err: syscall.ENOTDIR}
 	}
 
 	// Slow path: make sure parent exists and then call Mkdir for path.
@@ -1395,7 +1395,7 @@ func (f *File) WriteTo(w io.Writer) (written int64, err error) {
 
 // Stat returns the FileInfo structure describing file. If there is an
 // error.
-func (f *File) Stat() (os.FileInfo, error) {
+func (f *File) Stat() (iofs.FileInfo, error) {
 	fs, err := f.c.fstat(f.handle)
 	if err != nil {
 		return nil, err
@@ -1729,7 +1729,7 @@ func (f *File) ReadFrom(r io.Reader) (int64, error) {
 		case *io.LimitedReader:
 			remain = r.N
 
-		case interface{ Stat() (os.FileInfo, error) }:
+		case interface{ Stat() (iofs.FileInfo, error) }:
 			info, err := r.Stat()
 			if err == nil {
 				remain = info.Size()
@@ -1811,7 +1811,7 @@ func (f *File) Seek(offset int64, whence int) (int64, error) {
 	}
 
 	if offset < 0 {
-		return f.offset, os.ErrInvalid
+		return f.offset, iofs.ErrInvalid
 	}
 
 	f.offset = offset
@@ -1826,7 +1826,7 @@ func (f *File) Chown(uid, gid int) error {
 // Chmod changes the permissions of the current file.
 //
 // See Client.Chmod for details.
-func (f *File) Chmod(mode os.FileMode) error {
+func (f *File) Chmod(mode iofs.FileMode) error {
 	return f.c.setfstat(f.handle, sshFileXferAttrPermissions, toChmodPerm(mode))
 }
 
@@ -1860,7 +1860,7 @@ func (f *File) Truncate(size int64) error {
 }
 
 // normaliseError normalises an error into a more standard form that can be
-// checked against stdlib errors like io.EOF or os.ErrNotExist.
+// checked against stdlib errors like io.EOF or fs.ErrNotExist.
 func normaliseError(err error) error {
 	switch err := err.(type) {
 	case *StatusError:
@@ -1868,9 +1868,9 @@ func normaliseError(err error) error {
 		case sshFxEOF:
 			return io.EOF
 		case sshFxNoSuchFile:
-			return os.ErrNotExist
+			return iofs.ErrNotExist
 		case sshFxPermissionDenied:
-			return os.ErrPermission
+			return iofs.ErrPermission
 		case sshFxOk:
 			return nil
 		default:
@@ -1914,17 +1914,17 @@ func flags(f int) uint32 {
 // This differs from fromFileMode in that we preserve the POSIX versions of
 // setuid, setgid and sticky in m, because we've historically supported those
 // bits, and we mask off any non-permission bits.
-func toChmodPerm(m os.FileMode) (perm uint32) {
-	const mask = os.ModePerm | s_ISUID | s_ISGID | s_ISVTX
+func toChmodPerm(m iofs.FileMode) (perm uint32) {
+	const mask = iofs.ModePerm | s_ISUID | s_ISGID | s_ISVTX
 	perm = uint32(m & mask)
 
-	if m&os.ModeSetuid != 0 {
+	if m&iofs.ModeSetuid != 0 {
 		perm |= s_ISUID
 	}
-	if m&os.ModeSetgid != 0 {
+	if m&iofs.ModeSetgid != 0 {
 		perm |= s_ISGID
 	}
-	if m&os.ModeSticky != 0 {
+	if m&iofs.ModeSticky != 0 {
 		perm |= s_ISVTX
 	}
 

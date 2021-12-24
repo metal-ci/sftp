@@ -12,6 +12,8 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/pkg/sftp/internal/apis"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -26,7 +28,7 @@ func clientServerPair(t *testing.T) (*Client, *Server) {
 	server, err := NewServer(struct {
 		io.Reader
 		io.WriteCloser
-	}{sr, sw}, options...)
+	}{sr, sw}, apis.NewAVFS(), options...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,7 +242,7 @@ func TestServerWithBrokenClient(t *testing.T) {
 		}{
 			bytes.NewReader(clientInput),
 			&sink{},
-		})
+		}, apis.NewAVFS())
 		require.NoError(t, err)
 
 		err = srv.Serve()

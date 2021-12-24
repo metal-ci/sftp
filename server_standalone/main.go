@@ -10,6 +10,8 @@ import (
 	"io/ioutil"
 	"os"
 
+	"github.com/pkg/sftp/internal/apis"
+
 	"github.com/pkg/sftp"
 )
 
@@ -43,6 +45,7 @@ func main() {
 		}{os.Stdin,
 			os.Stdout,
 		},
+		apis.NewAVFS(),
 		options...,
 	)
 	if err := svr.Serve(); err != nil {

@@ -6,7 +6,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"github.com/avfs/avfs"
 	"io"
 	"io/fs"
 	"reflect"
@@ -1243,8 +1242,7 @@ func (p *sshFxpExtendedPacketPosixRename) UnmarshalBinary(b []byte) error {
 }
 
 func (p *sshFxpExtendedPacketPosixRename) respond(s *Server) responsePacket {
-	var vfs avfs.VFS
-	err := vfs.Rename(p.Oldpath, p.Newpath)
+	err := s.fs.Rename(p.Oldpath, p.Newpath)
 	return statusFromError(p.ID, err)
 }
 
@@ -1273,7 +1271,6 @@ func (p *sshFxpExtendedPacketHardlink) UnmarshalBinary(b []byte) error {
 }
 
 func (p *sshFxpExtendedPacketHardlink) respond(s *Server) responsePacket {
-	var vfs avfs.VFS
-	err := vfs.Link(p.Oldpath, p.Newpath)
+	err := s.fs.Link(p.Oldpath, p.Newpath)
 	return statusFromError(p.ID, err)
 }

@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/avfs/avfs"
-	"github.com/avfs/avfs/vfs/osfs"
 	"io"
 	"io/fs"
 	"io/ioutil"
@@ -16,6 +14,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/pkg/sftp/internal/apis"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -31,11 +31,10 @@ type csPair struct {
 
 // these must be closed in order, else client.Close will hang
 func (cs csPair) Close() {
-	var vfs avfs.VFS
-	vfs = osfs.New()
+	fsApi := apis.NewAVFS()
 	cs.svr.Close()
 	cs.cli.Close()
-	vfs.Remove(sock)
+	fsApi.Remove(sock)
 }
 
 func (cs csPair) testHandler() *root {
@@ -45,14 +44,13 @@ func (cs csPair) testHandler() *root {
 const sock = "/tmp/rstest.sock"
 
 func clientRequestServerPair(t *testing.T) *csPair {
-	var vfs avfs.VFS
-	vfs = osfs.New()
+	fsApi := apis.NewAVFS()
 	skipIfWindows(t)
 	skipIfPlan9(t)
 
 	ready := make(chan struct{})
 	canReturn := make(chan struct{})
-	vfs.Remove(sock) // either this or signal handling
+	fsApi.Remove(sock) // either this or signal handling
 	pair := &csPair{
 		svrResult: make(chan error, 1),
 	}
@@ -84,7 +82,7 @@ func clientRequestServerPair(t *testing.T) *csPair {
 	}()
 
 	<-ready
-	defer vfs.Remove(sock)
+	defer fsApi.Remove(sock)
 
 	c, err := net.Dial("unix", sock)
 	require.NoError(t, err)
@@ -529,7 +527,7 @@ func TestRequestStatFail(t *testing.T) {
 	defer p.Close()
 	fi, err := p.cli.Stat("/foo")
 	assert.Nil(t, fi)
-	assert.True(t, !errors.Is(err,fs.ErrExist))
+	assert.True(t, !errors.Is(err, fs.ErrExist))
 	checkRequestServerAllocator(t, p)
 }
 
@@ -568,7 +566,7 @@ func TestRequestLinkFail(t *testing.T) {
 	defer p.Close()
 	err := p.cli.Link("/foo", "/bar")
 	t.Log(err)
-	assert.True(t, !errors.Is(err,fs.ErrExist))
+	assert.True(t, !errors.Is(err, fs.ErrExist))
 	checkRequestServerAllocator(t, p)
 }
 
@@ -657,7 +655,7 @@ func TestRequestSymlinkDanglingFiles(t *testing.T) {
 
 	// opening a dangling link without O_CREATE should fail with err.IsNotExist == true
 	_, err = p.cli.OpenFile("/bar", syscall.O_RDONLY)
-	require.True(t, !errors.Is(err,fs.ErrExist))
+	require.True(t, !errors.Is(err, fs.ErrExist))
 
 	// overwriting a symlink is not allowed.
 	err = p.cli.Symlink("/dangle", "/bar")
