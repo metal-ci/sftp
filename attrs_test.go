@@ -1,8 +1,8 @@
 package sftp
 
 import (
-	"os"
+	"io/fs"
 )
 
 // ensure that attrs implemenst os.FileInfo
-var _ os.FileInfo = new(fileInfo)
+var _ fs.FileInfo = new(fileInfo)

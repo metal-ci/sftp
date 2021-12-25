@@ -2,10 +2,8 @@
 
 package sftp
 
-import (
-	"os"
-)
+import "io/fs"
 
-func fileStatFromInfoOs(fi os.FileInfo, flags *uint32, fileStat *FileStat) {
+func fileStatFromInfoOs(fi fs.FileInfo, flags *uint32, fileStat *FileStat) {
 	// todo
 }

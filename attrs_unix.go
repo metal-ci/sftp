@@ -3,11 +3,11 @@
 package sftp
 
 import (
-	"os"
+	"io/fs"
 	"syscall"
 )
 
-func fileStatFromInfoOs(fi os.FileInfo, flags *uint32, fileStat *FileStat) {
+func fileStatFromInfoOs(fi fs.FileInfo, flags *uint32, fileStat *FileStat) {
 	if statt, ok := fi.Sys().(*syscall.Stat_t); ok {
 		*flags |= sshFileXferAttrUIDGID
 		fileStat.UID = statt.Uid

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"syscall"
 	"testing"
 
 	"github.com/kr/fs"
@@ -72,11 +73,11 @@ var flagsTests = []struct {
 	flags int
 	want  uint32
 }{
-	{os.O_RDONLY, sshFxfRead},
-	{os.O_WRONLY, sshFxfWrite},
-	{os.O_RDWR, sshFxfRead | sshFxfWrite},
-	{os.O_RDWR | os.O_CREATE | os.O_TRUNC, sshFxfRead | sshFxfWrite | sshFxfCreat | sshFxfTrunc},
-	{os.O_WRONLY | os.O_APPEND, sshFxfWrite | sshFxfAppend},
+	{syscall.O_RDONLY, sshFxfRead},
+	{syscall.O_WRONLY, sshFxfWrite},
+	{syscall.O_RDWR, sshFxfRead | sshFxfWrite},
+	{syscall.O_RDWR | syscall.O_CREAT | syscall.O_TRUNC, sshFxfRead | sshFxfWrite | sshFxfCreat | sshFxfTrunc},
+	{syscall.O_WRONLY | syscall.O_APPEND, sshFxfWrite | sshFxfAppend},
 }
 
 func TestFlags(t *testing.T) {

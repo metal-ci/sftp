@@ -12,6 +12,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/pkg/sftp/internal/apis"
+
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
 
@@ -32,6 +34,7 @@ func init() {
 
 func main() {
 	var auths []ssh.AuthMethod
+	fsApi := apis.NewAVFS()
 	if aconn, err := net.Dial("unix", os.Getenv("SSH_AUTH_SOCK")); err == nil {
 		auths = append(auths, ssh.PublicKeysCallback(agent.NewClient(aconn).Signers))
 
@@ -64,7 +67,7 @@ func main() {
 	}
 	defer w.Close()
 
-	f, err := os.Open("/dev/zero")
+	f, err := fsApi.Open("/dev/zero")
 	if err != nil {
 		log.Fatal(err)
 	}

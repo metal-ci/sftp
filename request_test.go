@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"errors"
 	"io"
-	"os"
+	"io/fs"
 	"testing"
+
+	"github.com/pkg/sftp/internal/apis"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -38,19 +40,30 @@ func (t *testHandler) Filecmd(r *Request) error {
 }
 
 func (t *testHandler) Filelist(r *Request) (ListerAt, error) {
-	if t.err != nil {
-		return nil, t.err
+	fsApis := []apis.Fs{
+		apis.NewAVFS(),
+		apis.NewOS(),
 	}
-	_ = r.WithContext(r.Context()) // initialize context for deadlock testing
-	f, err := os.Open(r.Filepath)
-	if err != nil {
-		return nil, err
+
+	var fInfo []fs.FileInfo
+
+	for _, fsApi := range fsApis {
+		if t.err != nil {
+			return nil, t.err
+		}
+		_ = r.WithContext(r.Context()) // initialize context for deadlock testing
+		f, err := fsApi.Open(r.Filepath)
+		if err != nil {
+			return nil, err
+		}
+		fi, err := f.Stat()
+		if err != nil {
+			return nil, err
+		}
+		fInfo = append(fInfo, fi)
 	}
-	fi, err := f.Stat()
-	if err != nil {
-		return nil, err
-	}
-	return listerat([]os.FileInfo{fi}), nil
+
+	return listerat(fInfo), nil
 }
 
 // make sure len(fakefile) == len(filecontents)

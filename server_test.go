@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"path"
 	"runtime"
 	"sync"
 	"syscall"
 	"testing"
+
+	"github.com/pkg/sftp/internal/apis"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -25,7 +28,7 @@ func clientServerPair(t *testing.T) (*Client, *Server) {
 	server, err := NewServer(struct {
 		io.Reader
 		io.WriteCloser
-	}{sr, sw}, options...)
+	}{sr, sw}, apis.NewAVFS(), options...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +133,6 @@ func TestConcurrentRequests(t *testing.T) {
 	checkServerAllocator(t, server)
 }
 
-// Test error conversion
 func TestStatusFromError(t *testing.T) {
 	type test struct {
 		err error
@@ -144,13 +146,12 @@ func TestStatusFromError(t *testing.T) {
 	}
 	testCases := []test{
 		{syscall.ENOENT, tpkt(1, sshFxNoSuchFile)},
-		{&os.PathError{Err: syscall.ENOENT},
+		{&fs.PathError{Err: syscall.ENOENT},
 			tpkt(2, sshFxNoSuchFile)},
-		{&os.PathError{Err: errors.New("foo")}, tpkt(3, sshFxFailure)},
+		{&fs.PathError{Err: errors.New("foo")}, tpkt(3, sshFxFailure)},
 		{ErrSSHFxEOF, tpkt(4, sshFxEOF)},
 		{ErrSSHFxOpUnsupported, tpkt(5, sshFxOPUnsupported)},
 		{io.EOF, tpkt(6, sshFxEOF)},
-		{os.ErrNotExist, tpkt(7, sshFxNoSuchFile)},
 	}
 	for _, tc := range testCases {
 		tc.pkt.StatusError.msg = tc.err.Error()
@@ -241,7 +242,7 @@ func TestServerWithBrokenClient(t *testing.T) {
 		}{
 			bytes.NewReader(clientInput),
 			&sink{},
-		})
+		}, apis.NewAVFS())
 		require.NoError(t, err)
 
 		err = srv.Serve()

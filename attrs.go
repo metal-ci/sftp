@@ -4,7 +4,7 @@ package sftp
 // see http://tools.ietf.org/html/draft-ietf-secsh-filexfer-02#section-5
 
 import (
-	"os"
+	"io/fs"
 	"time"
 )
 
@@ -19,7 +19,7 @@ const (
 		sshFileXferAttrACmodTime | sshFileXferAttrExtended
 )
 
-// fileInfo is an artificial type designed to satisfy os.FileInfo.
+// fileInfo is an artificial type designed to satisfy fs.FileInfo.
 type fileInfo struct {
 	name string
 	stat *FileStat
@@ -32,7 +32,7 @@ func (fi *fileInfo) Name() string { return fi.name }
 func (fi *fileInfo) Size() int64 { return int64(fi.stat.Size) }
 
 // Mode returns file mode bits.
-func (fi *fileInfo) Mode() os.FileMode { return toFileMode(fi.stat.Mode) }
+func (fi *fileInfo) Mode() fs.FileMode { return toFileMode(fi.stat.Mode) }
 
 // ModTime returns the last modification time of the file.
 func (fi *fileInfo) ModTime() time.Time { return time.Unix(int64(fi.stat.Mtime), 0) }
@@ -44,7 +44,7 @@ func (fi *fileInfo) Sys() interface{} { return fi.stat }
 
 // FileStat holds the original unmarshalled values from a call to READDIR or
 // *STAT. It is exported for the purposes of accessing the raw values via
-// os.FileInfo.Sys(). It is also used server side to store the unmarshalled
+// fs.FileInfo.Sys(). It is also used server side to store the unmarshalled
 // values for SetStat.
 type FileStat struct {
 	Size     uint64
@@ -62,14 +62,14 @@ type StatExtended struct {
 	ExtData string
 }
 
-func fileInfoFromStat(stat *FileStat, name string) os.FileInfo {
+func fileInfoFromStat(stat *FileStat, name string) fs.FileInfo {
 	return &fileInfo{
 		name: name,
 		stat: stat,
 	}
 }
 
-func fileStatFromInfo(fi os.FileInfo) (uint32, *FileStat) {
+func fileStatFromInfo(fi fs.FileInfo) (uint32, *FileStat) {
 	mtime := fi.ModTime().Unix()
 	atime := mtime
 	var flags uint32 = sshFileXferAttrSize |

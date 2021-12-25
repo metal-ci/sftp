@@ -1,11 +1,12 @@
 package sftp
 
 import (
-	"os"
 	"regexp"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/pkg/sftp/internal/apis"
 )
 
 const (
@@ -14,29 +15,33 @@ const (
 )
 
 func TestRunLsWithExamplesDirectory(t *testing.T) {
+	fsApi := apis.NewAVFS()
 	path := "examples"
-	item, _ := os.Stat(path)
+	item, _ := fsApi.Stat(path)
 	result := runLs(nil, item)
 	runLsTestHelper(t, result, typeDirectory, path)
 }
 
 func TestRunLsWithLicensesFile(t *testing.T) {
 	path := "LICENSE"
-	item, _ := os.Stat(path)
+	fsApi := apis.NewAVFS()
+	item, _ := fsApi.Stat(path)
 	result := runLs(nil, item)
 	runLsTestHelper(t, result, typeFile, path)
 }
 
 func TestRunLsWithExamplesDirectoryWithOSLookup(t *testing.T) {
+	fsApi := apis.NewAVFS()
 	path := "examples"
-	item, _ := os.Stat(path)
+	item, _ := fsApi.Stat(path)
 	result := runLs(osIDLookup{}, item)
 	runLsTestHelper(t, result, typeDirectory, path)
 }
 
 func TestRunLsWithLicensesFileWithOSLookup(t *testing.T) {
+	fsApi := apis.NewAVFS()
 	path := "LICENSE"
-	item, _ := os.Stat(path)
+	item, _ := fsApi.Stat(path)
 	result := runLs(osIDLookup{}, item)
 	runLsTestHelper(t, result, typeFile, path)
 }

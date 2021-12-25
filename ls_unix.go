@@ -3,11 +3,11 @@
 package sftp
 
 import (
-	"os"
+	"io/fs"
 	"syscall"
 )
 
-func lsLinksUIDGID(fi os.FileInfo) (numLinks uint64, uid, gid string) {
+func lsLinksUIDGID(fi fs.FileInfo) (numLinks uint64, uid, gid string) {
 	numLinks = 1
 	uid, gid = "0", "0"
 

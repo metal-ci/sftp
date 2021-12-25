@@ -7,6 +7,7 @@ package sftp
 import (
 	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"path"
 	"sort"
@@ -353,10 +354,10 @@ func (fs *root) unlink(pathname string) error {
 	return nil
 }
 
-type listerat []os.FileInfo
+type listerat []fs.FileInfo
 
 // Modeled after strings.Reader's ReadAt() implementation
-func (f listerat) ListAt(ls []os.FileInfo, offset int64) (int, error) {
+func (f listerat) ListAt(ls []fs.FileInfo, offset int64) (int, error) {
 	var n int
 	if offset >= int64(len(f)) {
 		return 0, io.EOF
@@ -411,8 +412,8 @@ func (fs *root) Filelist(r *Request) (ListerAt, error) {
 	return nil, errors.New("unsupported")
 }
 
-func (fs *root) readdir(pathname string) ([]os.FileInfo, error) {
-	dir, err := fs.fetch(pathname)
+func (f *root) readdir(pathname string) ([]fs.FileInfo, error) {
+	dir, err := f.fetch(pathname)
 	if err != nil {
 		return nil, err
 	}
@@ -421,9 +422,9 @@ func (fs *root) readdir(pathname string) ([]os.FileInfo, error) {
 		return nil, syscall.ENOTDIR
 	}
 
-	var files []os.FileInfo
+	var files []fs.FileInfo
 
-	for name, file := range fs.files {
+	for name, file := range f.files {
 		if path.Dir(name) == dir.name {
 			files = append(files, file)
 		}
@@ -581,14 +582,14 @@ func (f *memFile) Size() int64 {
 
 	return f.size()
 }
-func (f *memFile) Mode() os.FileMode {
+func (f *memFile) Mode() fs.FileMode {
 	if f.isdir {
-		return os.FileMode(0755) | os.ModeDir
+		return fs.FileMode(0755) | fs.ModeDir
 	}
 	if f.symlink != "" {
-		return os.FileMode(0777) | os.ModeSymlink
+		return fs.FileMode(0777) | fs.ModeSymlink
 	}
-	return os.FileMode(0644)
+	return fs.FileMode(0644)
 }
 func (f *memFile) ModTime() time.Time { return f.modtime }
 func (f *memFile) IsDir() bool        { return f.isdir }
